@@ -6,7 +6,6 @@ namespace MonkeysLegion\Session\Tests\Middleware;
 
 use MonkeysLegion\Session\Middleware\SessionMiddleware;
 use MonkeysLegion\Session\SessionManager;
-use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\Http\Message\ResponseInterface;
