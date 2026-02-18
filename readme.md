@@ -40,16 +40,16 @@ To prevent session hijacking, we store and verify these browser/network traits:
 
 ### SessionDriverInterface
 
-| Method      | Arguments       | Returns  | Description                                       |
-| :---------- | :-------------- | :------- | :------------------------------------------------ |
-| **open**    | `path`, `name`  | `bool`   | Initialize the storage resource.                  |
-| **close**   | -               | `bool`   | Close the storage resource.                       |
-| **read**    | `id`            | `string` | Retrieve serialized session data by ID.           |
-| **write**   | `id`, `data`    | `bool`   | Save serialized session data.                     |
-| **destroy** | `id`            | `bool`   | Delete the session data from storage.             |
-| **gc**      | `maxLifetime`   | `int`    | Garbage Collection: Delete sessions older than X. |
-| **lock**    | `id`, `timeout` | `bool`   | Acquire an exclusive lock on the session ID.      |
-| **unlock**  | `id`            | `bool`   | Release the lock so other requests can proceed.   |
+| Method      | Arguments                 | Returns      | Description                                       |
+| :---------- | :------------------------ | :----------- | :------------------------------------------------ |
+| **open**    | `path`, `name`            | `bool`       | Initialize the storage resource.                  |
+| **close**   | -                         | `bool`       | Close the storage resource.                       |
+| **read**    | `id`                      | `?array`     | Retrieve session data (payload + metadata) by ID. |
+| **write**   | `id`, `payload`, `metadata` | `bool`       | Save serialized session data and metadata.        |
+| **destroy** | `id`                      | `bool`       | Delete the session data from storage.             |
+| **gc**      | `maxLifetime`             | `int/false`  | Garbage Collection: Delete sessions older than X. |
+| **lock**    | `id`, `timeout`           | `bool`       | Acquire an exclusive lock on the session ID.      |
+| **unlock**  | `id`                      | `bool`       | Release the lock so other requests can proceed.   |
 
 ### SessionManager Details
 
@@ -64,17 +64,22 @@ The `SessionManager` is the high-level class your application code will actually
 
 #### SessionManager Methods
 
-| Method                  | Description                                                    |
-| :---------------------- | :------------------------------------------------------------- |
-| **start()**             | Resumes or starts a new session.                               |
-| **getId() / setId()**   | Get or manually set the Session ID.                            |
-| **get($key, $default)** | Retrieve data (supports dot notation like `user.id`).          |
-| **set($key, $value)**   | Store data in the session.                                     |
-| **has($key)**           | Returns `true` if the key is present.                          |
-| **flash($key, $value)** | Store data for the next request only.                          |
-| **pull($key)**          | Get the value and immediately delete it.                       |
-| **regenerate()**        | Change the Session ID (Crucial for login to prevent fixation). |
-| **destroy()**           | Wipe all data and remove the session from storage.             |
+| Method                               | Description                                                    |
+| :----------------------------------- | :------------------------------------------------------------- |
+| **start($id)**                       | Resumes or starts a new session with given ID.                 |
+| **save()**                           | Saves the current session data to the driver.                  |
+| **getId()**                          | Get the current Session ID.                                    |
+| **get($key, $default)**              | Retrieve data (supports dot notation).                         |
+| **set($key, $value)**                | Store data in the session.                                     |
+| **has($key)**                        | Returns `true` if the key is present.                          |
+| **forget($key)**                     | Remove a key from the session.                                 |
+| **flash($key, $value)**              | Store data for the next request only.                          |
+| **getFlash($key, $default)**         | Retrieve flash data.                                           |
+| **reflash()**                        | Keep all flash data for the next request.                      |
+| **regenerate($destroy)**             | Change the Session ID (Crucial for login to prevent fixation). |
+| **setIpAddress($ip)**                | Set the user's IP address for validation.                      |
+| **setUserAgent($ua)**                | Set the user's browser string for validation.                  |
+| **setUserId($id)**                   | Associate a User ID with the session.                          |
 
 ---
 
@@ -118,28 +123,30 @@ monkeyslegion-session/
 ├── src/
 │   ├── Contracts/
 │   │   ├── SessionInterface.php       # The Manager's API
-│   │   ├── DriverInterface.php        # The Storage Contract (with lock/unlock)
+│   │   └── SessionDriverInterface.php # The Storage Contract (with lock/unlock)
 │   ├── Drivers/
 │   │   ├── DatabaseDriver.php         # PDO/DB implementation
 │   │   ├── RedisDriver.php            # PhpRedis/Predis implementation
 │   │   └── FileDriver.php             # Local filesystem implementation
+│   ├── Exceptions/
+│   │   ├── SessionException.php
+│   │   └── SessionLockException.php   # If a lock cannot be acquired (timeout)
+│   ├── Factory/
+│   │   └── DriverFactory.php          # Factory to create driver instances
 │   ├── Middleware/
 │   │   └── SessionMiddleware.php      # PSR-15 Middleware logic
-│   ├── SessionManager.php             # The "Brain" (Coordinates Manager + Drivers)
 │   ├── SessionBag.php                 # The Data container (handles Flash/Payload)
-│   └── Exceptions/
-│       ├── SessionException.php
-│       └── SessionLockException.php   # If a lock cannot be acquired (timeout)
+│   └── SessionManager.php             # The "Brain" (Coordinates Bag + Drivers)
 ├── tests/                             # Unit and Integration tests
 ├── composer.json
-└── README.md
+└── readme.md
 ```
 
 ### Component Breakdown
 
 #### 1. The `SessionBag`
 
-Instead of putting all logic in the Manager, a `SessionBag` holds the actual data array. It handles the "Dot Notation" (e.g., `$session->get('user.profile.name')`) and manages which keys are **Flash** (one-time use) vs. **Persistent**.
+Instead of putting all logic in the Manager, a `SessionBag` holds the actual data array. It handles the "Dot Notation" (e.g., `$session->get('user.profile.name')`) and manages which keys are **Flash** (one-time use) vs. **Persistent**. It uses `put()` for storing attributes and `flash()` for temporary data.
 
 #### 2. The `SessionManager` (The Orchestrator)
 
@@ -182,17 +189,17 @@ This class should be injected into your Middleware or Controllers.
 
 ### Phase 4: Security Features
 
-- [ ] User-Agent validation
-- [ ] IP address validation (strict/relaxed modes)
+- [/] User-Agent validation (implemented in Middleware/Manager)
+- [/] IP address validation (implemented in Middleware/Manager)
 - [ ] CSRF token generation and validation
-- [ ] Session fixation prevention
+- [x] Session fixation prevention (via `regenerate()`)
 
 ### Phase 5: Advanced Features
 
 - [x] Flash data management
-- [ ] Garbage collection automation
+- [x] Garbage collection automation
 - [ ] Session encryption option
-- [ ] PSR-11 container integration
+- [x] PSR-11 container integration (via Factory/Service providers)
 
 ### Phase 6: Documentation & Release
 
