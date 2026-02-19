@@ -30,7 +30,19 @@ $session = new SessionManager($driver);
 
 ---
 
-## 3. Basic Usage
+## 3. Configuration & Installation
+
+### Publishing Config
+You can publish the default configuration file to your project's `config` directory using the following CLI command:
+
+```bash
+php ml session:publish
+```
+This will create `config/session.php` where you can customize drivers, lifetimes, and cookie settings.
+
+---
+
+## 4. Basic Usage
 
 ### Starting
 You must start the session before using it.
@@ -102,7 +114,57 @@ $session->save();
 
 ---
 
-## 6. The Complete Flow
+## 7. CSRF Protection
+
+The session manager includes built-in CSRF (Cross-Site Request Forgery) protection.
+
+### The Token
+A unique token is automatically generated when a session starts.
+
+```php
+// Get the current CSRF token
+$token = $session->token();
+
+// Regenerate the token (useful after login)
+$session->regenerateToken();
+```
+
+### Protection Middleware
+To protect your routes, add the `VerifyCsrfToken` middleware to your PSR-15 pipeline. It will automatically check POST, PUT, PATCH, and DELETE requests for a valid token.
+
+```php
+use MonkeysLegion\Session\Middleware\VerifyCsrfToken;
+
+// In your middleware stack (after SessionMiddleware)
+$csrfMiddleware = new VerifyCsrfToken($sessionManager);
+```
+
+The middleware looks for the token in:
+1. The `_token` field in the request body.
+2. The `X-CSRF-TOKEN` HTTP header.
+3. The `X-XSRF-TOKEN` HTTP header.
+
+---
+
+## 8. Middleware Integration (PSR-15)
+
+To use sessions in a PSR-15 compatible framework, you should add the `SessionMiddleware` to your global middleware stack.
+
+```php
+use MonkeysLegion\Session\Middleware\SessionMiddleware;
+
+$config = include 'config/session.php';
+$middleware = new SessionMiddleware($sessionManager, $config);
+```
+
+### Recommended Order:
+1. `SessionMiddleware` (Starts the session)
+2. `VerifyCsrfToken` (Protects against CSRF)
+3. Your Application Logic
+
+---
+
+## 9. The Complete Flow
 
 Here is how a typical request looks:
 

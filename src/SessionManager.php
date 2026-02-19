@@ -59,6 +59,12 @@ class SessionManager
 
         // 3. Initialize Bag
         $this->bag = new SessionBag($payload, $flash);
+
+        // 4. Ensure CSRF Token exists
+        if (!$this->has('_token')) {
+            $this->regenerateToken();
+        }
+
         $this->started = true;
     }
 
@@ -201,5 +207,21 @@ class SessionManager
     public function getUserId(): string|int|null
     {
         return $this->userId;
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function token(): string
+    {
+        return $this->get('_token');
+    }
+
+    /**
+     * {@inheritdoc}
+     */
+    public function regenerateToken(): void
+    {
+        $this->set('_token', bin2hex(random_bytes(40)));
     }
 }

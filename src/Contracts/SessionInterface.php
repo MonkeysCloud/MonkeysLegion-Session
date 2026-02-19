@@ -115,4 +115,18 @@ interface SessionInterface
      * @return array
      */
     public function all(): array;
+
+    /**
+     * Get the CSRF token value.
+     *
+     * @return string
+     */
+    public function token(): string;
+
+    /**
+     * Regenerate the CSRF token value.
+     *
+     * @return void
+     */
+    public function regenerateToken(): void;
 }

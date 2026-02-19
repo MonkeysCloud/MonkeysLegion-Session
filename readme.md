@@ -191,7 +191,7 @@ This class should be injected into your Middleware or Controllers.
 
 - [/] User-Agent validation (implemented in Middleware/Manager)
 - [/] IP address validation (implemented in Middleware/Manager)
-- [ ] CSRF token generation and validation
+- [x] CSRF token generation and validation
 - [x] Session fixation prevention (via `regenerate()`)
 
 ### Phase 5: Advanced Features
