@@ -184,3 +184,43 @@ if ($loginSuccess) {
 // This writes data to the file/db and releases the lock.
 $session->save(); 
 ```
+
+---
+
+## 10. Session Encryption
+
+The library supports AES-256-GCM encryption for session payloads to protect sensitive user data.
+
+### Configuration
+
+Enable encryption and define your key ring in `config/session.php`. The key ring supports multiple keys for smooth rotation.
+
+```php
+'encrypt' => true,
+
+'keys' => [
+    'v2' => 'your-32-character-current-key',
+    'v1' => 'your-32-character-old-key',
+],
+```
+
+- **Encryption**: Always uses the first key in the `keys` array.
+- **Decryption**: Attempts all keys in the `keys` array (starting with the one identified in the payload), allowing old sessions to remain valid after a key rotation.
+- **Automatic Migration**: When a session is decrypted using an old key, it is automatically re-encrypted with the current key when saved.
+- **Fail-Safe**: If decryption fails (e.g., due to key loss or tampering), the session is silently cleared, and the user is treated as having a new, empty session.
+
+### Manual Setup (Advanced)
+
+If you are not using the provided middleware, you can inject an `EncryptedSerializer` manually:
+
+```php
+use MonkeysLegion\Session\NativeSerializer;
+use MonkeysLegion\Session\EncryptedSerializer;
+
+$native = new NativeSerializer();
+$encrypter = new EncryptedSerializer($native, [
+    'v1' => $appKey
+]);
+
+$session = new SessionManager($driver, $encrypter);
+```

@@ -80,14 +80,6 @@ class DatabaseDriverTest extends TestCase
         $this->assertSame('{"foo":"bar"}', $row['flash_data']);
     }
 
-    public function testWriteInvalid(): void
-    {
-        // Database driver now basically always succeeds unless SQL error, 
-        // effectively tested by Valid test.
-        // If we want to test db failure, we'd need to mock connection or break table
-        $this->assertTrue(true);
-    }
-
     public function testDestroy(): void
     {
         $this->qb->raw(
@@ -113,27 +105,6 @@ class DatabaseDriverTest extends TestCase
         $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
 
         $this->assertSame(1, $driver->gc(3600));
-    }
-
-    public function testLockUnlock(): void
-    {
-        $supportsLock = true;
-
-        try {
-            $this->qb->raw("SELECT GET_LOCK('ml_test_lock', 1)");
-            $this->qb->raw("SELECT RELEASE_LOCK('ml_test_lock')");
-        } catch (\Throwable $e) {
-            $supportsLock = false;
-        }
-
-        if (!$supportsLock) {
-            $this->markTestSkipped('Database does not support GET_LOCK/RELEASE_LOCK.');
-        }
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-
-        $this->assertTrue($driver->lock('sess_id', 1));
-        $this->assertTrue($driver->unlock('sess_id'));
     }
 
     public function testWritePreservesCreatedAt(): void

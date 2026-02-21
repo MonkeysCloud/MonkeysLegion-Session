@@ -120,26 +120,37 @@ Since we are aligning with the **monkeyslegion-** ecosystem, the architecture ne
 
 ```text
 monkeyslegion-session/
+├── config/
+│   └── session.php                # Session configuration options
+├── docs/
+│   └── usage.md                   # Usage documentation and examples
+├── migrations/
+│   └── sessions.sql               # Database migration for sessions table
 ├── src/
+│   ├── Cli/
+│   │   └── Command/
+│   │       └── ConfigPublisher.php    # CLI command to publish config files
 │   ├── Contracts/
-│   │   ├── SessionInterface.php       # The Manager's API
-│   │   └── SessionDriverInterface.php # The Storage Contract (with lock/unlock)
+│   │   ├── DataHandlerInterface.php   # Serialization contract (e.g., JSON, encryption)
+│   │   ├── SessionDriverInterface.php # Storage driver contract (with lock/unlock)
+│   │   └── SessionInterface.php       # Session manager API contract
 │   ├── Drivers/
-│   │   ├── DatabaseDriver.php         # PDO/DB implementation
-│   │   ├── RedisDriver.php            # PhpRedis/Predis implementation
-│   │   └── FileDriver.php             # Local filesystem implementation
+│   │   ├── DatabaseDriver.php         # PDO/DB session storage implementation
+│   │   ├── FileDriver.php             # Filesystem session storage implementation
+│   │   └── RedisDriver.php            # Redis session storage implementation
+│   ├── EncryptedSerializer.php        # AES-256-GCM encryption layer (implements DataHandlerInterface)
 │   ├── Exceptions/
-│   │   ├── SessionException.php
-│   │   └── SessionLockException.php   # If a lock cannot be acquired (timeout)
+│   │   ├── SessionException.php       # Generic session exception
+│   │   └── SessionLockException.php   # Lock acquisition failure exception
 │   ├── Factory/
-│   │   └── DriverFactory.php          # Factory to create driver instances
+│   │   └── DriverFactory.php          # Factory for creating driver instances
 │   ├── Middleware/
-│   │   └── SessionMiddleware.php      # PSR-15 Middleware logic
-│   ├── SessionBag.php                 # The Data container (handles Flash/Payload)
-│   └── SessionManager.php             # The "Brain" (Coordinates Bag + Drivers)
-├── tests/                             # Unit and Integration tests
-├── composer.json
-└── readme.md
+│   │   ├── SessionMiddleware.php      # PSR-15 session middleware logic
+│   │   └── VerifyCsrfToken.php        # CSRF token validation middleware
+│   ├── NativeSerializer.php           # Default JSON serializer (implements DataHandlerInterface)
+│   ├── SessionBag.php                 # Data container (handles flash/payload)
+│   └── SessionManager.php             # Session orchestrator (coordinates Bag + Drivers)
+├── tests/
 ```
 
 ### Component Breakdown
@@ -198,7 +209,7 @@ This class should be injected into your Middleware or Controllers.
 
 - [x] Flash data management
 - [x] Garbage collection automation
-- [ ] Session encryption option
+- [x] Session encryption option (AES-256-GCM)
 - [x] PSR-11 container integration (via Factory/Service providers)
 
 ### Phase 6: Documentation & Release
@@ -206,7 +217,7 @@ This class should be injected into your Middleware or Controllers.
 - [x] Complete API documentation
 - [x] Usage examples and tutorials
 - [ ] Performance benchmarks
-- [ ] v1.0.0 stable release
+- [x] v1.0.0 stable release
 
 ---
 

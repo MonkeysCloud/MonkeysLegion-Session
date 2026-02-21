@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session;
 
+use MonkeysLegion\Session\Contracts\DataHandlerInterface;
 use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 use MonkeysLegion\Session\Exceptions\SessionException;
 
@@ -15,10 +16,14 @@ class SessionManager
     private ?string $ipAddress = null;
     private ?string $userAgent = null;
     private string|int|null $userId = null;
+    private Contracts\DataHandlerInterface $dataHandler;
 
     public function __construct(
         private SessionDriverInterface $driver,
-    ) {}
+        ?DataHandlerInterface $dataHandler = null
+    ) {
+        $this->dataHandler = $dataHandler ?: new NativeSerializer();
+    }
 
     public function start(?string $id = null): void
     {
@@ -44,7 +49,12 @@ class SessionManager
 
         if ($data) {
             // Existing session
-            $payload = Serializer::unserialize($data['payload']);
+            try {
+                $payload = $this->dataHandler->restore($data['payload']);
+            } catch (\Throwable) {
+                // Decryption or unserialization failed - silent invalidation
+                $payload = [];
+            }
             $flash = json_decode($data['flash_data'] ?? '[]', true);
 
             // Populate metadata on read so it persists/updates correctly
@@ -74,8 +84,8 @@ class SessionManager
             return;
         }
 
-        // Serialize Payload
-        $payload = Serializer::serialize($this->bag->all());
+        // Prepare Payload (Serialize/Encrypt)
+        $payload = $this->dataHandler->prepare($this->bag->all());
 
         // Prepare Metadata
         $metadata = [

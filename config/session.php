@@ -45,4 +45,17 @@ return [
     'cookie_httponly' => true,
     // SameSite setting for the session cookie ('Lax', 'Strict', or 'None').
     'cookie_samesite' => 'Lax',
+
+    /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*
+     * Session Encryption
+     *━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
+
+    // Whether to encrypt the session data.
+    'encrypt' => false,
+
+    // The encryption key ring. The first key is used for encryption.
+    // All keys are used for decryption to support smooth key rotation.
+    'keys' => [
+        'main_key' => env('APP_KEY'),
+    ],
 ];
