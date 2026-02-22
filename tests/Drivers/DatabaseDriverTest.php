@@ -7,7 +7,6 @@ namespace MonkeysLegion\Session\Tests\Drivers;
 use MonkeysLegion\Database\SQLite\Connection;
 use MonkeysLegion\Query\QueryBuilder;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
-use MonkeysLegion\Session\Exceptions\SessionException;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 
@@ -21,19 +20,25 @@ class DatabaseDriverTest extends TestCase
         $this->conn = new Connection(["memory" => true]);
         $this->qb = new QueryBuilder($this->conn);
 
+        // 1. Create the table (Cleaned for SQLite compatibility)
         $this->qb->raw(
             'CREATE TABLE IF NOT EXISTS sessions (
-                session_id TEXT PRIMARY KEY,
-                payload TEXT,
-                flash_data TEXT,
-                created_at INTEGER,
-                last_activity INTEGER,
-                expiration INTEGER,
-                user_id TEXT,
-                ip_address TEXT,
-                user_agent TEXT
-            )'
+            session_id VARCHAR(255) PRIMARY KEY NOT NULL,
+            payload TEXT,
+            flash_data TEXT,
+            created_at INTEGER NOT NULL,
+            last_activity INTEGER NOT NULL,
+            expiration INTEGER NOT NULL,
+            user_id INTEGER NULL,
+            ip_address VARCHAR(45) NULL,
+            user_agent TEXT NULL
+        );'
         );
+
+        // 2. Create indexes separately
+        $this->qb->raw('CREATE INDEX idx_sessions_last_activity ON sessions(last_activity);');
+        $this->qb->raw('CREATE INDEX idx_sessions_expiration ON sessions(expiration);');
+        $this->qb->raw('CREATE INDEX idx_sessions_user_id ON sessions(user_id);');
     }
 
     public function testOpenClose(): void
@@ -226,7 +231,7 @@ class DatabaseDriverTest extends TestCase
             'ip_address' => '127.0.0.1',
             'user_agent' => 'Mozilla/5.0',
             'user_id' => 'user_123',
-            'flash_data' => '[]'
+            'flash_data' => '[]',
         ];
 
         $driver = $this->makeDriverWithRealQueryBuilder($this->qb);

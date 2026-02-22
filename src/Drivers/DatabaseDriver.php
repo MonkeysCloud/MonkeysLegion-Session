@@ -47,6 +47,8 @@ class DatabaseDriver implements SessionDriverInterface
     /**
      * {@inheritdoc}
      */
+    // In DatabaseDriver.php
+
     public function read(string $id): ?array
     {
         $session = $this->queryBuilder
@@ -58,6 +60,11 @@ class DatabaseDriver implements SessionDriverInterface
             return null;
         }
 
+        if (isset($session['expiration']) && time() > (int)$session['expiration']) {
+            $this->destroy($id);
+            return null;
+        }
+
         return $session;
     }
 
@@ -66,14 +73,15 @@ class DatabaseDriver implements SessionDriverInterface
      */
     public function write(string $id, string $payload, array $metadata): bool
     {
-        // Setup default data array
+        $lifetime = $this->config['lifetime'] ?? 7200;
+        $now = time();
+
         $data = [
             'payload' => $payload,
-            'last_activity' => time()
+            'last_activity' => $now,
+            'expiration' => $now + $lifetime,
         ];
-        
-        // Merge allowed metadata columns if they exist in metadata array
-        // We do this to prevent arbitrary metadata from crashing SQL update if column doesn't exist
+
         $allowedColumns = ['flash_data', 'user_id', 'ip_address', 'user_agent'];
         foreach ($allowedColumns as $col) {
             if (array_key_exists($col, $metadata)) {
@@ -81,7 +89,6 @@ class DatabaseDriver implements SessionDriverInterface
             }
         }
 
-        // Check if session exists (UPSERT would be better but keeping it simple for now)
         $exists = $this->queryBuilder
             ->from($this->table)
             ->where('session_id', '=', $id)
@@ -92,14 +99,13 @@ class DatabaseDriver implements SessionDriverInterface
                 ->update($this->table, $data)
                 ->where('session_id', '=', $id)
                 ->execute() > 0;
-        } else {
-            // New session
-            $data['session_id'] = $id;
-            $data['created_at'] = time();
-            
-            $this->queryBuilder->insert($this->table, $data);
-            return true;
         }
+
+        $data['session_id'] = $id;
+        $data['created_at'] = $now;
+
+        $this->queryBuilder->insert($this->table, $data);
+        return true;
     }
 
     /**

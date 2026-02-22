@@ -5,24 +5,23 @@ return [
     /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*
      * Session Driver
      *━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
+
     // The default session driver to use.
-    'default' => 'file',
+    'default' => $_ENV['SESSION_DRIVER'] ?? 'file',
 
     // Supported session drivers and their configurations.
     'drivers' => [
         'file' => [
-            // Directory where session files will be stored.
-            'path' => base_path('var/sessions'),
-            // Session lifetime in seconds (2 hours).
-            'lifetime' => 7200,
+            'path' => $_ENV['SESSION_FILE_PATH'] ?? base_path('var/sessions'),
+            'lifetime' => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
         ],
         'database' => [
-            // Database table to store sessions.
-            'table' => 'sessions',
+            'table' => $_ENV['SESSION_TABLE'] ?? 'sessions',
+            'lifetime' => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
         ],
         'redis' => [
-            // Session lifetime in seconds (2 hours).
-            'lifetime' => 7200,
+            'connection' => $_ENV['REDIS_SESSION_CONNECTION'] ?? 'default',
+            'lifetime' => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
         ],
     ],
 
@@ -30,32 +29,21 @@ return [
      * Session Cookie Configuration
      *━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
 
-    // Name of the session cookie.
-    'cookie_name' => 'ml_session',
-
-    // Lifetime of the session cookie in seconds (2 hours).
-    'cookie_lifetime' => 7200,
-    // Path for which the session cookie is available.
-    'cookie_path' => '/',
-    // Domain that the session cookie is available to.
-    'cookie_domain' => '',
-    // Whether the session cookie should only be sent over secure connections.
-    'cookie_secure' => true,
-    // Whether the session cookie is accessible only through the HTTP protocol.
-    'cookie_httponly' => true,
-    // SameSite setting for the session cookie ('Lax', 'Strict', or 'None').
-    'cookie_samesite' => 'Lax',
+    'cookie_name'     => $_ENV['SESSION_COOKIE_NAME'] ?? 'ml_session',
+    'cookie_lifetime' => (int) ($_ENV['SESSION_COOKIE_LIFETIME'] ?? 7200),
+    'cookie_path'     => $_ENV['SESSION_COOKIE_PATH'] ?? '/',
+    'cookie_domain'   => $_ENV['SESSION_COOKIE_DOMAIN'] ?? '',
+    'cookie_secure'   => (bool) ($_ENV['SESSION_COOKIE_SECURE'] ?? true),
+    'cookie_httponly' => (bool) ($_ENV['SESSION_COOKIE_HTTPONLY'] ?? true),
+    'cookie_samesite' => $_ENV['SESSION_COOKIE_SAMESITE'] ?? 'Lax',
 
     /*━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*
      * Session Encryption
      *━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━*/
 
-    // Whether to encrypt the session data.
-    'encrypt' => false,
+    'encrypt' => (bool) ($_ENV['SESSION_ENCRYPT'] ?? false),
 
-    // The encryption key ring. The first key is used for encryption.
-    // All keys are used for decryption to support smooth key rotation.
     'keys' => [
-        'main_key' => env('APP_KEY'),
+        'main_key' => $_ENV['APP_KEY'] ?? null,
     ],
 ];
