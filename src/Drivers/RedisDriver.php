@@ -30,6 +30,17 @@ class RedisDriver implements SessionDriverInterface
         $this->ttl = $ttl;
     }
 
+    public function __destruct()
+    {
+        try {
+            if (isset($this->redis) && !empty($this->locks)) {
+                $this->close();
+            }
+        } catch (\Throwable $e) {
+            // Silence errors in destructor to prevent "Fatal error during shutdown"
+        }
+    }
+
     /**
      * {@inheritdoc}
      */
@@ -167,7 +178,7 @@ class RedisDriver implements SessionDriverInterface
                 $acquired = $this->redis->set(
                     $lockKey,
                     $lockValue,
-                    ['nx', 'ex' => $timeout + 30] // Lock expires slightly after timeout
+                    ['nx', 'ex' => $timeout + 5] // Lock expires slightly after timeout
                 );
 
                 if ($acquired) {
@@ -191,9 +202,8 @@ class RedisDriver implements SessionDriverInterface
      */
     public function unlock(string $id): bool
     {
+        // Check if we actually hold this lock locally
         if (!isset($this->locks[$id])) {
-            // Silently return true if not locked by this instance
-            // This prevents errors during cleanup
             return true;
         }
 
@@ -201,23 +211,23 @@ class RedisDriver implements SessionDriverInterface
         $lockValue = $this->locks[$id];
 
         try {
-            // Only delete the lock if it's still ours (compare-and-delete)
-            // This prevents accidentally releasing someone else's lock
             $script = <<<'LUA'
-                if redis.call("get", KEYS[1]) == ARGV[1] then
-                    return redis.call("del", KEYS[1])
-                else
-                    return 0
-                end
-            LUA;
+            if redis.call("get", KEYS[1]) == ARGV[1] then
+                return redis.call("del", KEYS[1])
+            else
+                return 0
+            end
+        LUA;
 
+            // Use the Lua script to ensure atomicity
             $result = $this->redis->eval($script, [$lockKey, $lockValue], 1);
 
+            // CRITICAL: Always remove from local array if we attempted release
             unset($this->locks[$id]);
 
-            return $result > 0;
+            return (int)$result > 0;
         } catch (\RedisException $e) {
-            throw SessionLockException::releaseFailed($id, $e->getMessage());
+            return false;
         }
     }
 

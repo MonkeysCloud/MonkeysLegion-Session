@@ -108,7 +108,7 @@ class RedisDriverTest extends TestCase
 
         $this->redis->expects($this->once())
             ->method('set')
-            ->with($lockKey, $this->anything(), ['nx', 'ex' => 60]) // 30 + 30
+            ->with($lockKey, $this->anything(), ['nx', 'ex' => 35]) // 30 + 5
             ->willReturn(true);
 
         $this->assertTrue($this->driver->lock($id));

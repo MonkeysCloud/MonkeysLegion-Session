@@ -52,6 +52,7 @@ class DatabaseDriver implements SessionDriverInterface
     public function read(string $id): ?array
     {
         $session = $this->queryBuilder
+            ->reset()
             ->from($this->table)
             ->where('session_id', '=', $id)
             ->first();
@@ -90,12 +91,14 @@ class DatabaseDriver implements SessionDriverInterface
         }
 
         $exists = $this->queryBuilder
+            ->reset()
             ->from($this->table)
             ->where('session_id', '=', $id)
             ->count() > 0;
 
         if ($exists) {
             return $this->queryBuilder
+                ->reset()
                 ->update($this->table, $data)
                 ->where('session_id', '=', $id)
                 ->execute() > 0;
@@ -104,7 +107,7 @@ class DatabaseDriver implements SessionDriverInterface
         $data['session_id'] = $id;
         $data['created_at'] = $now;
 
-        $this->queryBuilder->insert($this->table, $data);
+        $this->queryBuilder->reset()->insert($this->table, $data);
         return true;
     }
 
@@ -114,6 +117,7 @@ class DatabaseDriver implements SessionDriverInterface
     public function destroy(string $id): bool
     {
         return $this->queryBuilder
+            ->reset()
             ->delete($this->table)
             ->where('session_id', '=', $id)
             ->execute() > 0;
@@ -152,7 +156,7 @@ class DatabaseDriver implements SessionDriverInterface
         $lockName = self::LOCK_KEY . $id;
 
         // GET_LOCK returns 1 if successful, 0 if it timed out, NULL on error
-        $result = $this->queryBuilder->raw("SELECT GET_LOCK(?, ?)", [$lockName, $timeout]);
+        $result = $this->queryBuilder->reset()->raw("SELECT GET_LOCK(?, ?)", [$lockName, $timeout]);
 
         //TODO : VERIFY THE RESULT OF RELEASE_LOCK, IT'S ARRAY NOT BOOLEAN
         return (int)$result === 1;
@@ -166,7 +170,7 @@ class DatabaseDriver implements SessionDriverInterface
         $lockName = self::LOCK_KEY . $id;
 
         // RELEASE_LOCK returns 1 if released, 0 if lock wasn't yours, NULL if no lock
-        $result = $this->queryBuilder->raw("SELECT RELEASE_LOCK(?)", [$lockName]);
+        $result = $this->queryBuilder->reset()->raw("SELECT RELEASE_LOCK(?)", [$lockName]);
         //TODO : VERIFY THE RESULT OF RELEASE_LOCK, IT'S ARRAY NOT BOOLEAN
         return (int)$result === 1;
     }

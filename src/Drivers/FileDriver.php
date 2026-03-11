@@ -39,6 +39,17 @@ class FileDriver implements SessionDriverInterface
         }
     }
 
+    public function __destruct()
+    {
+        try {
+            if (!empty($this->locks)) {
+                $this->close();
+            }
+        } catch (\Throwable $e) {
+            // Silence errors in destructor to prevent "Fatal error during shutdown"
+        }
+    }
+
     /**
      * {@inheritdoc}
      */
