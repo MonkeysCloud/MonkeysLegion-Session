@@ -234,4 +234,9 @@ class SessionManager
     {
         $this->set('_token', bin2hex(random_bytes(40)));
     }
+
+    public function all(): array
+    {
+        return $this->bag?->all() ?? [];
+    }
 }
