@@ -26,9 +26,10 @@ class FileDriver implements SessionDriverInterface
         $this->path = rtrim($path, '/\\');
         $this->ttl = $ttl;
 
-        // Ensure the directory exists
+        // Ensure the directory exists (@ suppresses TOCTOU race warning
+        // when concurrent processes both try to create the dir)
         if (!is_dir($this->path)) {
-            if (!mkdir($this->path, 0755, true) && !is_dir($this->path)) {
+            if (!@mkdir($this->path, 0755, true) && !is_dir($this->path)) {
                 throw SessionException::driverFailed('open', "Failed to create session directory: {$this->path}");
             }
         }
