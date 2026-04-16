@@ -16,7 +16,7 @@ class SessionManager implements SessionInterface
 {
     private string $sessionId = '';
     private bool $sessionStarted = false;
-    private Contracts\DataHandlerInterface $dataHandler;
+    private DataHandlerInterface $dataHandler;
     
     private AttributeBag $attributeBag;
     private FlashBag $flashBag;
@@ -91,46 +91,51 @@ class SessionManager implements SessionInterface
             throw SessionException::driverFailed('lock', 'Could not acquire session lock');
         }
 
-        // 2. Read the payload
-        $data = $this->driver->read($this->sessionId);
+        // 2. Read and initialize — release lock on any failure
+        try {
+            $data = $this->driver->read($this->sessionId);
 
-        if ($data !== null) {
-            try {
-                $this->payload = $this->dataHandler->restore($data['payload'] ?? '');
-            } catch (\Throwable) {
+            if ($data !== null) {
+                try {
+                    $this->payload = $this->dataHandler->restore($data['payload'] ?? '');
+                } catch (\Throwable) {
+                    $this->payload = [];
+                }
+            } else {
                 $this->payload = [];
             }
-        } else {
-            $this->payload = [];
+
+            // 3. Initialize bags
+            $attrData  = &$this->getBagData($this->attributeBag->getStorageKey());
+            $flashData = &$this->getBagData($this->flashBag->getStorageKey());
+            $metaData  = &$this->getBagData($this->metadataBag->getStorageKey());
+
+            $this->attributeBag->initialize($attrData);
+            $this->flashBag->initialize($flashData);
+            $this->metadataBag->initialize($metaData);
+
+            // Populate context info if provided
+            if ($this->clientIp !== null) {
+                $this->metadataBag->set('ip_address', $this->clientIp);
+            }
+            if ($this->clientUa !== null) {
+                $this->metadataBag->set('user_agent', $this->clientUa);
+            }
+
+            // Stamp usage
+            $this->metadataBag->stampNew();
+
+            // 4. Ensure CSRF (optional but good default)
+            if (!$this->attributeBag->has('_token')) {
+                $this->attributeBag->set('_token', bin2hex(random_bytes(40)));
+            }
+
+            $this->sessionStarted = true;
+            return true;
+        } catch (\Throwable $e) {
+            $this->driver->unlock($this->sessionId);
+            throw $e;
         }
-
-        // 3. Initialize bags
-        $attrData  = &$this->getBagData($this->attributeBag->getStorageKey());
-        $flashData = &$this->getBagData($this->flashBag->getStorageKey());
-        $metaData  = &$this->getBagData($this->metadataBag->getStorageKey());
-
-        $this->attributeBag->initialize($attrData);
-        $this->flashBag->initialize($flashData);
-        $this->metadataBag->initialize($metaData);
-
-        // Populate context info if provided
-        if ($this->clientIp !== null) {
-            $this->metadataBag->set('ip_address', $this->clientIp);
-        }
-        if ($this->clientUa !== null) {
-            $this->metadataBag->set('user_agent', $this->clientUa);
-        }
-
-        // Stamp usage
-        $this->metadataBag->stampNew();
-
-        // 4. Ensure CSRF (optional but good default)
-        if (!$this->attributeBag->has('_token')) {
-            $this->attributeBag->set('_token', bin2hex(random_bytes(40)));
-        }
-
-        $this->sessionStarted = true;
-        return true;
     }
 
     private function &getBagData(string $key): array
@@ -157,12 +162,12 @@ class SessionManager implements SessionInterface
             'user_id'    => $this->metadataBag->get('user_id'),
         ];
 
-        $success = $this->driver->write($this->sessionId, $serialized, $metadata);
-        
-        $this->driver->unlock($this->sessionId);
-        
-        $this->sessionStarted = false;
-        return $success;
+        try {
+            return $this->driver->write($this->sessionId, $serialized, $metadata);
+        } finally {
+            $this->driver->unlock($this->sessionId);
+            $this->sessionStarted = false;
+        }
     }
 
     public function regenerate(bool $destroy = false): bool
@@ -174,16 +179,19 @@ class SessionManager implements SessionInterface
         $oldId = $this->sessionId;
         $this->sessionId = $this->generateId();
 
-        if ($destroy) {
-            $this->driver->destroy($oldId);
-        } else {
+        // Always release old lock, then optionally destroy data
+        try {
+            if ($destroy) {
+                $this->driver->destroy($oldId);
+            }
+        } finally {
             $this->driver->unlock($oldId);
         }
 
         if (!$this->driver->lock($this->sessionId)) {
             throw SessionException::driverFailed('lock', 'Could not acquire lock for regenerated session');
         }
-        
+
         $this->metadataBag->set('created_at', time());
 
         return true;
@@ -191,10 +199,16 @@ class SessionManager implements SessionInterface
 
     public function invalidate(): bool
     {
+        // Ensure session is started so bags are populated from storage
+        if (!$this->sessionStarted) {
+            $this->start();
+        }
+
         $this->attributeBag->clear();
         $this->flashBag->clear();
         $this->metadataBag->clear();
-        
+        $this->payload = [];
+
         return $this->regenerate(true);
     }
 

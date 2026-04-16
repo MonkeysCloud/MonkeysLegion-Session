@@ -38,6 +38,9 @@ class SessionMiddleware implements MiddlewareInterface
         // 2. Set Context on Lazy Manager
         if ($id) {
             $this->manager->id = $id;
+        } else {
+            // Reset ID to prevent session bleed in long-lived workers (RoadRunner/Swoole)
+            $this->manager->id = '';
         }
 
         $this->populateMetadata($request);

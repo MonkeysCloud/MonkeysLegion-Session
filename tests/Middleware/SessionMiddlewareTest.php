@@ -44,8 +44,9 @@ class SessionMiddlewareTest extends TestCase
             ->method('getCookieParams')
             ->willReturn(['ml_session' => 'sess_123']);
 
-        // Since it's lazy, we set ID but don't call start()
-        // (Verified implicitly because driver->read is never called until attribute access)
+        // Verify laziness: driver->read is never called because session is never accessed
+        $this->driver->expects($this->never())
+            ->method('read');
 
         // 2. Populate Metadata (Request Params)
         $this->request->method('getServerParams')->willReturn(['REMOTE_ADDR' => '127.0.0.1']);
@@ -68,8 +69,7 @@ class SessionMiddlewareTest extends TestCase
             ->with($this->request)
             ->willReturn($this->response);
 
-        $this->manager->id = 'sess_123';
-
+        // Let middleware set the ID from cookie (don't pre-seed)
         $this->response->expects($this->once())
             ->method('withAddedHeader')
             ->with('Set-Cookie', $this->stringContains('ml_session=sess_123'))

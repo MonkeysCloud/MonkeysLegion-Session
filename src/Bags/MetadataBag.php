@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace MonkeysLegion\Session\Bags;
 
 use MonkeysLegion\Session\Contracts\SessionBagInterface;
-use DateTimeImmutable;
 
 class MetadataBag implements SessionBagInterface
 {

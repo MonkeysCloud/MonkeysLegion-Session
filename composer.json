@@ -10,10 +10,7 @@
   },
   "autoload": {
     "psr-4": {
-      "MonkeysLegion\\Session\\": "src/",
-      "MonkeysLegion\\Database\\": "../database/src/",
-      "MonkeysLegion\\Query\\": "../query/src/",
-      "MonkeysLegion\\Core\\": "../core/src/"
+      "MonkeysLegion\\Session\\": "src/"
     }
   },
   "autoload-dev": {
