@@ -15,7 +15,7 @@ class SessionMiddleware implements MiddlewareInterface
     private array $config;
 
     public function __construct(
-        private SessionManager $manager,
+        private readonly SessionManager $manager,
         array $config = []
     ) {
         $this->config = array_merge([
@@ -35,23 +35,30 @@ class SessionMiddleware implements MiddlewareInterface
         $cookies = $request->getCookieParams();
         $id = $cookies[$this->config['cookie_name']] ?? null;
 
-        // 2. Start Session (Locks & Reads)
-        $this->manager->start($id);
+        // 2. Set Context on Lazy Manager
+        if ($id) {
+            $this->manager->id = $id;
+        } else {
+            // Reset ID to prevent session bleed in long-lived workers (RoadRunner/Swoole)
+            $this->manager->id = '';
+        }
 
-        // 3. Populate Metadata
         $this->populateMetadata($request);
+
+        // 3. Bind Manager to Request
+        $request = $request->withAttribute('session', $this->manager);
 
         // 4. Handle Request
         try {
             $response = $handler->handle($request);
         } finally {
-            // 5. Save Session (Writes & Unlocks)
+            // 5. Save Session (Only occurs if started!)
             $this->manager->save();
         }
 
         // 6. Add Cookie to Response
-        if ($this->manager->isStarted() || $this->manager->getId()) {
-            $response = $this->addCookieToResponse($response, $this->manager->getId());
+        if ($this->manager->isStarted || $this->manager->id !== '') {
+            $response = $this->addCookieToResponse($response, $this->manager->id);
         }
 
         return $response;
@@ -61,18 +68,14 @@ class SessionMiddleware implements MiddlewareInterface
     {
         $serverParams = $request->getServerParams();
 
-        // IP Address
         $ip = $serverParams['REMOTE_ADDR'] ?? null;
         if ($headerIp = $request->getHeaderLine('X-Forwarded-For')) {
-             // Simple extraction, take first IP
              $ip = trim(explode(',', $headerIp)[0]);
         }
-        $this->manager->setIpAddress($ip);
 
-        // User Agent
-        if ($request->hasHeader('User-Agent')) {
-            $this->manager->setUserAgent($request->getHeaderLine('User-Agent'));
-        }
+        $ua = $request->hasHeader('User-Agent') ? $request->getHeaderLine('User-Agent') : null;
+
+        $this->manager->setRequestInfo($ip, $ua);
     }
 
     private function addCookieToResponse(ResponseInterface $response, string $sessionId): ResponseInterface
@@ -88,7 +91,7 @@ class SessionMiddleware implements MiddlewareInterface
             $this->config['cookie_samesite']
         );
         
-        if ($this->config['cookie_domain']) {
+        if (!empty($this->config['cookie_domain'])) {
             $cookieValue .= '; Domain=' . $this->config['cookie_domain'];
         }
 

@@ -14,8 +14,9 @@ use Psr\Http\Server\RequestHandlerInterface;
 
 class SessionMiddlewareTest extends TestCase
 {
-    /** @var SessionManager&MockObject */
-    private $manager;
+    /** @var SessionDriverInterface&MockObject */
+    private $driver;
+    private SessionManager $manager;
     /** @var ServerRequestInterface&MockObject */
     private $request;
     /** @var RequestHandlerInterface&MockObject */
@@ -27,7 +28,8 @@ class SessionMiddlewareTest extends TestCase
 
     protected function setUp(): void
     {
-        $this->manager = $this->createMock(SessionManager::class);
+        $this->driver = $this->createMock(\MonkeysLegion\Session\Contracts\SessionDriverInterface::class);
+        $this->manager = new SessionManager($this->driver);
         $this->request = $this->createMock(ServerRequestInterface::class);
         $this->handler = $this->createMock(RequestHandlerInterface::class);
         $this->response = $this->createMock(ResponseInterface::class);
@@ -42,12 +44,11 @@ class SessionMiddlewareTest extends TestCase
             ->method('getCookieParams')
             ->willReturn(['ml_session' => 'sess_123']);
 
-        // 2. Start Session
-        $this->manager->expects($this->once())
-            ->method('start')
-            ->with('sess_123');
+        // Verify laziness: driver->read is never called because session is never accessed
+        $this->driver->expects($this->never())
+            ->method('read');
 
-        // 3. Populate Metadata (Request Params)
+        // 2. Populate Metadata (Request Params)
         $this->request->method('getServerParams')->willReturn(['REMOTE_ADDR' => '127.0.0.1']);
 
         $this->request->method('getHeaderLine')->willReturnMap([
@@ -55,24 +56,20 @@ class SessionMiddlewareTest extends TestCase
             ['User-Agent', 'TestAgent']
         ]);
 
-        $this->request->method('hasHeader')->with('User-Agent')->willReturn(true);
+        $this->request->method('hasHeader')->willReturnMap([
+            ['X-Forwarded-For', false],
+            ['User-Agent', true]
+        ]);
 
-        $this->manager->expects($this->once())->method('setIpAddress')->with('127.0.0.1');
-        $this->manager->expects($this->once())->method('setUserAgent')->with('TestAgent');
+        $this->request->method('withAttribute')->willReturnSelf();
 
-        // 4. Handle Request
+        // 3. Handle Request
         $this->handler->expects($this->once())
             ->method('handle')
             ->with($this->request)
             ->willReturn($this->response);
 
-        // 5. Save Session
-        $this->manager->expects($this->once())->method('save');
-
-        // 6. Cookie Setting
-        $this->manager->method('isStarted')->willReturn(true);
-        $this->manager->method('getId')->willReturn('sess_123');
-
+        // Let middleware set the ID from cookie (don't pre-seed)
         $this->response->expects($this->once())
             ->method('withAddedHeader')
             ->with('Set-Cookie', $this->stringContains('ml_session=sess_123'))

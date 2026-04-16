@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace MonkeysLegion\Session\Factory;
 
 use InvalidArgumentException;
-use MonkeysLegion\Database\Contracts\ConnectionInterface;
+use MonkeysLegion\Database\Contracts\ConnectionManagerInterface;
 use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
 use MonkeysLegion\Session\Drivers\FileDriver;
@@ -47,8 +47,8 @@ class DriverFactory
 
     protected function createDatabaseDriver(array $config): DatabaseDriver
     {
-        if (!isset($config['connection']) || !($config['connection'] instanceof ConnectionInterface)) {
-            throw new RuntimeException("Database driver requires 'connection' (ConnectionInterface) in configuration.");
+        if (!isset($config['connection']) || !($config['connection'] instanceof ConnectionManagerInterface)) {
+            throw new RuntimeException("Database driver requires 'connection' (ConnectionManagerInterface) in configuration.");
         }
 
         return new DatabaseDriver($config['connection'], $config);

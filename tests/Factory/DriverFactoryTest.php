@@ -5,7 +5,7 @@ declare(strict_types=1);
 namespace MonkeysLegion\Session\Tests\Factory;
 
 use InvalidArgumentException;
-use MonkeysLegion\Database\Contracts\ConnectionInterface;
+use MonkeysLegion\Database\Contracts\ConnectionManagerInterface;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
 use MonkeysLegion\Session\Drivers\FileDriver;
 use MonkeysLegion\Session\Drivers\RedisDriver;
@@ -44,9 +44,17 @@ class DriverFactoryTest extends TestCase
 
     public function testMakeDatabaseDriver(): void
     {
-        $conn = $this->createMock(ConnectionInterface::class);
+        if (!class_exists(\MonkeysLegion\Query\Query\QueryBuilder::class)) {
+            $this->markTestSkipped('monkeyslegion-query is not installed.');
+        }
+        $manager = \MonkeysLegion\Database\Connection\ConnectionManager::fromArray([
+            'default' => [
+                'driver' => 'sqlite',
+                'memory' => true,
+            ]
+        ]);
         $driver = $this->factory->make('database', [
-            'connection' => $conn,
+            'connection' => $manager,
             'table' => 'sessions'
         ]);
 
@@ -62,6 +70,9 @@ class DriverFactoryTest extends TestCase
 
     public function testMakeRedisDriver(): void
     {
+        if (!class_exists(\Redis::class)) {
+            $this->markTestSkipped('Redis PHP extension is not installed.');
+        }
         $redis = $this->createMock(Redis::class);
         $driver = $this->factory->make('redis', [
             'redis' => $redis,
