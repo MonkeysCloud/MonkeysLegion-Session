@@ -7,126 +7,94 @@ namespace MonkeysLegion\Session\Contracts;
 interface SessionInterface
 {
     /**
+     * The unique identifier for this session.
+     */
+    public string $id { get; set; }
+
+    /**
+     * Whether the session has been started successfully.
+     */
+    public bool $isStarted { get; }
+
+    /**
      * Start or resume the session.
-     *
-     * @return bool True if session started successfully
      */
     public function start(): bool;
 
     /**
-     * Get the current session ID.
-     *
-     * @return string|null
+     * Regenerate the session ID (crucial for login to prevent fixation).
      */
-    public function getId(): ?string;
+    public function regenerate(bool $destroy = false): bool;
 
     /**
-     * Set the session ID.
-     *
-     * @param string $id
-     * @return void
+     * Save the session data to storage.
      */
-    public function setId(string $id): void;
+    public function save(): bool;
+
+    /**
+     * Invalidate (destroy) the session completely.
+     */
+    public function invalidate(): bool;
 
     /**
      * Retrieve a value from the session (supports dot notation).
-     *
-     * @param string $key
-     * @param mixed $default
-     * @return mixed
      */
     public function get(string $key, mixed $default = null): mixed;
 
     /**
      * Store a value in the session (supports dot notation).
-     *
-     * @param string $key
-     * @param mixed $value
-     * @return void
      */
     public function set(string $key, mixed $value): void;
 
     /**
      * Check if a key exists in the session.
-     *
-     * @param string $key
-     * @return bool
      */
     public function has(string $key): bool;
 
     /**
      * Remove a key from the session.
-     *
-     * @param string $key
-     * @return void
      */
     public function remove(string $key): void;
 
     /**
-     * Store flash data for the next request only.
-     *
-     * @param string $key
-     * @param mixed $value
-     * @return void
-     */
-    public function flash(string $key, mixed $value): void;
-
-    /**
      * Get a value and immediately delete it.
-     *
-     * @param string $key
-     * @param mixed $default
-     * @return mixed
      */
     public function pull(string $key, mixed $default = null): mixed;
 
     /**
-     * Regenerate the session ID (crucial for login to prevent fixation).
-     *
-     * @param bool $deleteOldSession Whether to delete the old session data
-     * @return bool
+     * Store flash data for the next request only.
      */
-    public function regenerate(bool $deleteOldSession = false): bool;
+    public function flash(string $key, mixed $value): void;
 
     /**
-     * Destroy the session and remove all data.
-     *
-     * @return bool
+     * Reflash all flash data for another request.
      */
-    public function destroy(): bool;
+    public function reflash(): void;
 
     /**
-     * Save the session data to storage.
-     *
-     * @return bool
+     * Keep specific flash data keys for another request.
      */
-    public function save(): bool;
+    public function keep(string ...$keys): void;
 
     /**
-     * Check if the session has been started.
-     *
-     * @return bool
+     * Store flash data that will be available immediately and expire at end of request.
      */
-    public function isStarted(): bool;
+    public function now(string $key, mixed $value): void;
 
     /**
-     * Get all session data.
+     * Get all session data from the attribute bag.
      *
-     * @return array
+     * @return array<string, mixed>
      */
     public function all(): array;
 
     /**
-     * Get the CSRF token value.
-     *
-     * @return string
+     * Get the CSRF token.
      */
     public function token(): string;
 
     /**
      * Regenerate the CSRF token value.
-     *
-     * @return void
      */
     public function regenerateToken(): void;
 }

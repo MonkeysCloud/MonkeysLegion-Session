@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session\Drivers;
 
-use MonkeysLegion\Database\Contracts\ConnectionInterface;
-use MonkeysLegion\Query\QueryBuilder;
+use MonkeysLegion\Database\Contracts\ConnectionManagerInterface;
+use MonkeysLegion\Query\Query\QueryBuilder;
 use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 
 class DatabaseDriver implements SessionDriverInterface
@@ -16,10 +16,10 @@ class DatabaseDriver implements SessionDriverInterface
     private const LOCK_KEY = 'ml_session_';
 
     public function __construct(
-        private ConnectionInterface $connection,
+        private ConnectionManagerInterface $connectionManager,
         private array $config
     ) {
-        $this->queryBuilder = new QueryBuilder($this->connection);
+        $this->queryBuilder = new QueryBuilder($this->connectionManager);
         $this->table = $config['table'] ?? 'sessions';
     }
 
@@ -99,15 +99,15 @@ class DatabaseDriver implements SessionDriverInterface
         if ($exists) {
             return $this->queryBuilder
                 ->reset()
-                ->update($this->table, $data)
+                ->from($this->table)
                 ->where('session_id', '=', $id)
-                ->execute() > 0;
+                ->update($data) > 0;
         }
 
         $data['session_id'] = $id;
         $data['created_at'] = $now;
 
-        $this->queryBuilder->reset()->insert($this->table, $data);
+        $this->queryBuilder->reset()->from($this->table)->insert($data);
         return true;
     }
 
@@ -118,9 +118,9 @@ class DatabaseDriver implements SessionDriverInterface
     {
         return $this->queryBuilder
             ->reset()
-            ->delete($this->table)
+            ->from($this->table)
             ->where('session_id', '=', $id)
-            ->execute() > 0;
+            ->delete() > 0;
     }
 
     /**
@@ -130,7 +130,7 @@ class DatabaseDriver implements SessionDriverInterface
     {
         $threshold = time() - $maxLifetime;
 
-        $count = (new QueryBuilder($this->connection))
+        $count = (new QueryBuilder($this->connectionManager))
             ->from($this->table)
             ->where('last_activity', '<', $threshold)
             ->count();
@@ -139,10 +139,10 @@ class DatabaseDriver implements SessionDriverInterface
             return 0;
         }
 
-        $deleted = (new QueryBuilder($this->connection))
-            ->delete($this->table)
+        $deleted = (new QueryBuilder($this->connectionManager))
+            ->from($this->table)
             ->where('last_activity', '<', $threshold)
-            ->execute();
+            ->delete();
 
         return $deleted > 0 ? $count : false;
     }
@@ -156,9 +156,9 @@ class DatabaseDriver implements SessionDriverInterface
         $lockName = self::LOCK_KEY . $id;
 
         // GET_LOCK returns 1 if successful, 0 if it timed out, NULL on error
-        $result = $this->queryBuilder->reset()->raw("SELECT GET_LOCK(?, ?)", [$lockName, $timeout]);
+        $stmt = $this->connectionManager->connection()->query("SELECT GET_LOCK(?, ?)", [$lockName, $timeout]);
+        $result = $stmt->fetchColumn();
 
-        //TODO : VERIFY THE RESULT OF RELEASE_LOCK, IT'S ARRAY NOT BOOLEAN
         return (int)$result === 1;
     }
 
@@ -170,8 +170,9 @@ class DatabaseDriver implements SessionDriverInterface
         $lockName = self::LOCK_KEY . $id;
 
         // RELEASE_LOCK returns 1 if released, 0 if lock wasn't yours, NULL if no lock
-        $result = $this->queryBuilder->reset()->raw("SELECT RELEASE_LOCK(?)", [$lockName]);
-        //TODO : VERIFY THE RESULT OF RELEASE_LOCK, IT'S ARRAY NOT BOOLEAN
+        $stmt = $this->connectionManager->connection()->query("SELECT RELEASE_LOCK(?)", [$lockName]);
+        $result = $stmt->fetchColumn();
+
         return (int)$result === 1;
     }
 }

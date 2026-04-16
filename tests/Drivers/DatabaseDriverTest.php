@@ -4,24 +4,31 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session\Tests\Drivers;
 
-use MonkeysLegion\Database\SQLite\Connection;
-use MonkeysLegion\Query\QueryBuilder;
+use MonkeysLegion\Database\Config\DatabaseConfig;
+use MonkeysLegion\Database\Connection\Connection;
+use MonkeysLegion\Database\Connection\ConnectionManager;
+use MonkeysLegion\Query\Query\QueryBuilder;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
 use PHPUnit\Framework\TestCase;
 use ReflectionProperty;
 
 class DatabaseDriverTest extends TestCase
 {
-    protected Connection $conn;
+    protected ConnectionManager $manager;
     protected QueryBuilder $qb;
 
     protected function setUp(): void
     {
-        $this->conn = new Connection(["memory" => true]);
-        $this->qb = new QueryBuilder($this->conn);
+        $this->manager = ConnectionManager::fromArray([
+            'default' => [
+                'driver' => 'sqlite',
+                'memory' => true
+            ]
+        ]);
+        $this->qb = new QueryBuilder($this->manager);
 
         // 1. Create the table (Cleaned for SQLite compatibility)
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'CREATE TABLE IF NOT EXISTS sessions (
             session_id VARCHAR(255) PRIMARY KEY NOT NULL,
             payload TEXT,
@@ -36,9 +43,9 @@ class DatabaseDriverTest extends TestCase
         );
 
         // 2. Create indexes separately
-        $this->qb->raw('CREATE INDEX idx_sessions_last_activity ON sessions(last_activity);');
-        $this->qb->raw('CREATE INDEX idx_sessions_expiration ON sessions(expiration);');
-        $this->qb->raw('CREATE INDEX idx_sessions_user_id ON sessions(user_id);');
+        $this->manager->connection()->execute('CREATE INDEX idx_sessions_last_activity ON sessions(last_activity);');
+        $this->manager->connection()->execute('CREATE INDEX idx_sessions_expiration ON sessions(expiration);');
+        $this->manager->connection()->execute('CREATE INDEX idx_sessions_user_id ON sessions(user_id);');
     }
 
     public function testOpenClose(): void
@@ -50,7 +57,7 @@ class DatabaseDriverTest extends TestCase
 
     public function testReadValid(): void
     {
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['sess_id', 'serialized', '{}', time(), time(), time() + 3600, null, null, null]
@@ -71,7 +78,7 @@ class DatabaseDriverTest extends TestCase
 
     public function testWriteValid(): void
     {
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['sess_id', 'old', '{}', time(), time(), time() + 3600, null, null, null]
@@ -87,7 +94,7 @@ class DatabaseDriverTest extends TestCase
 
     public function testDestroy(): void
     {
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['sess_id', 'data', '{}', time(), time(), time() + 3600, null, null, null]
@@ -101,7 +108,7 @@ class DatabaseDriverTest extends TestCase
     public function testGc(): void
     {
         $expired = time() - 7200;
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['old_sess', 'data', '{}', $expired, $expired, $expired, null, null, null]
@@ -115,7 +122,7 @@ class DatabaseDriverTest extends TestCase
     public function testWritePreservesCreatedAt(): void
     {
         $created = time() - 100;
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['sess_created', 'old', '{}', $created, $created, $created + 3600, null, null, null]
@@ -142,7 +149,7 @@ class DatabaseDriverTest extends TestCase
     public function testGcWithNoExpiredReturnsZero(): void
     {
         $now = time();
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['fresh_sess', 'data', '{}', $now, $now, $now + 3600, null, null, null]
@@ -157,13 +164,13 @@ class DatabaseDriverTest extends TestCase
         $expired = time() - 7200;
         $fresh = time();
 
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['old_sess', 'data', '{}', $expired, $expired, $expired, null, null, null]
         );
 
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['fresh_sess', 'data', '{}', $fresh, $fresh, $fresh + 3600, null, null, null]
@@ -184,7 +191,7 @@ class DatabaseDriverTest extends TestCase
 
     private function makeDriverWithRealQueryBuilder(QueryBuilder $qb): DatabaseDriver
     {
-        $driver = new DatabaseDriver($this->conn, ['table' => 'sessions']);
+        $driver = new DatabaseDriver($this->manager, ['table' => 'sessions']);
 
         $ref = new ReflectionProperty(DatabaseDriver::class, 'queryBuilder');
         $ref->setValue($driver, $qb);
@@ -194,7 +201,7 @@ class DatabaseDriverTest extends TestCase
 
     public function testReadNullPayloadReturnsEmptyString(): void
     {
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['sess_null', null, '{}', time(), time(), time() + 3600, null, null, null]
@@ -209,7 +216,7 @@ class DatabaseDriverTest extends TestCase
     public function testWriteUpdatesPayloadAndLastActivity(): void
     {
         $created = time();
-        $this->qb->raw(
+        $this->manager->connection()->execute(
             'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
             ['sess_upd', 'old', '{}', $created, $created, $created + 3600, null, null, null]

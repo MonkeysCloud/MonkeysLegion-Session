@@ -4,239 +4,288 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session;
 
+use MonkeysLegion\Session\Bags\AttributeBag;
+use MonkeysLegion\Session\Bags\FlashBag;
+use MonkeysLegion\Session\Bags\MetadataBag;
 use MonkeysLegion\Session\Contracts\DataHandlerInterface;
 use MonkeysLegion\Session\Contracts\SessionDriverInterface;
+use MonkeysLegion\Session\Contracts\SessionInterface;
 use MonkeysLegion\Session\Exceptions\SessionException;
 
-class SessionManager
+class SessionManager implements SessionInterface
 {
-    private ?string $id = null;
-    private ?SessionBag $bag = null;
-    private bool $started = false;
-    private ?string $ipAddress = null;
-    private ?string $userAgent = null;
-    private string|int|null $userId = null;
+    private string $sessionId = '';
+    private bool $sessionStarted = false;
     private Contracts\DataHandlerInterface $dataHandler;
+    
+    private AttributeBag $attributeBag;
+    private FlashBag $flashBag;
+    private MetadataBag $metadataBag;
+    
+    private array $payload = [];
 
     public function __construct(
-        private SessionDriverInterface $driver,
-        ?DataHandlerInterface $dataHandler = null
+        private readonly SessionDriverInterface $driver,
+        ?DataHandlerInterface $dataHandler = null,
+        private readonly string $sessionName = 'monkeyslegion_session'
     ) {
         $this->dataHandler = $dataHandler ?: new NativeSerializer();
+        $this->attributeBag = new AttributeBag();
+        $this->flashBag = new FlashBag();
+        $this->metadataBag = new MetadataBag();
     }
 
-    public function start(?string $id = null): void
+    public string $id {
+        get => $this->sessionId ?: '';
+        set(string $value) {
+            $this->sessionId = $value;
+        }
+    }
+
+    public bool $isStarted {
+        get => $this->sessionStarted;
+    }
+
+    public AttributeBag $attributes {
+        get {
+            $this->start();
+            return $this->attributeBag;
+        }
+    }
+
+    public FlashBag $flashes {
+        get {
+            $this->start();
+            return $this->flashBag;
+        }
+    }
+
+    public MetadataBag $metadata {
+        get {
+            $this->start();
+            return $this->metadataBag;
+        }
+    }
+
+    private ?string $clientIp = null;
+    private ?string $clientUa = null;
+
+    public function setRequestInfo(?string $ip, ?string $userAgent): void
     {
-        if ($this->started) {
-            return;
+        $this->clientIp = $ip;
+        $this->clientUa = $userAgent;
+    }
+
+    public function start(): bool
+    {
+        if ($this->sessionStarted) {
+            return true;
         }
 
-        $this->id = $id;
-
-        if (!$this->id) {
-            $this->id = $this->generateId();
+        if (empty($this->sessionId)) {
+            $this->sessionId = $this->generateId();
         }
 
-        // 1. Lock
-        if (!$this->driver->lock($this->id)) {
-            // The driver implementation of lock() has a timeout and retries.
-            // If it returns false, it means timeout.
+        // 1. Lock the session
+        if (!$this->driver->lock($this->sessionId)) {
             throw SessionException::driverFailed('lock', 'Could not acquire session lock');
         }
 
-        // 2. Read
-        $data = $this->driver->read($this->id);
+        // 2. Read the payload
+        $data = $this->driver->read($this->sessionId);
 
-        if ($data) {
-            // Existing session
+        if ($data !== null) {
             try {
-                $payload = $this->dataHandler->restore($data['payload']);
+                $this->payload = $this->dataHandler->restore($data['payload'] ?? '');
             } catch (\Throwable) {
-                // Decryption or unserialization failed - silent invalidation
-                $payload = [];
+                $this->payload = [];
             }
-            $flash = json_decode($data['flash_data'] ?? '[]', true);
-
-            // Populate metadata on read so it persists/updates correctly
-            $this->ipAddress = $data['ip_address'] ?? null;
-            $this->userAgent = $data['user_agent'] ?? null;
-            $this->userId = $data['user_id'] ?? null;
         } else {
-            // New session
-            $payload = [];
-            $flash = [];
+            $this->payload = [];
         }
 
-        // 3. Initialize Bag
-        $this->bag = new SessionBag($payload, $flash);
+        // 3. Initialize bags
+        $attrData  = &$this->getBagData($this->attributeBag->getStorageKey());
+        $flashData = &$this->getBagData($this->flashBag->getStorageKey());
+        $metaData  = &$this->getBagData($this->metadataBag->getStorageKey());
 
-        // 4. Ensure CSRF Token exists
-        if (!$this->has('_token')) {
-            $this->regenerateToken();
+        $this->attributeBag->initialize($attrData);
+        $this->flashBag->initialize($flashData);
+        $this->metadataBag->initialize($metaData);
+
+        // Populate context info if provided
+        if ($this->clientIp !== null) {
+            $this->metadataBag->set('ip_address', $this->clientIp);
+        }
+        if ($this->clientUa !== null) {
+            $this->metadataBag->set('user_agent', $this->clientUa);
         }
 
-        $this->started = true;
+        // Stamp usage
+        $this->metadataBag->stampNew();
+
+        // 4. Ensure CSRF (optional but good default)
+        if (!$this->attributeBag->has('_token')) {
+            $this->attributeBag->set('_token', bin2hex(random_bytes(40)));
+        }
+
+        $this->sessionStarted = true;
+        return true;
     }
 
-    public function save(): void
+    private function &getBagData(string $key): array
     {
-        if (!$this->started || !$this->id) {
-            return;
+        if (!isset($this->payload[$key]) || !is_array($this->payload[$key])) {
+            $this->payload[$key] = [];
+        }
+        return $this->payload[$key];
+    }
+
+    public function save(): bool
+    {
+        if (!$this->sessionStarted || empty($this->sessionId)) {
+            return false;
         }
 
-        // Prepare Payload (Serialize/Encrypt)
-        $payload = $this->dataHandler->prepare($this->bag->all());
+        $this->flashBag->clearOldData();
 
-        // Prepare Metadata
+        $serialized = $this->dataHandler->prepare($this->payload);
+
         $metadata = [
-            'flash_data' => json_encode($this->bag->getNewFlash()),
-            'ip_address' => $this->ipAddress,
-            'user_agent' => $this->userAgent,
-            'user_id'    => $this->userId,
+            'ip_address' => $this->metadataBag->get('ip_address'),
+            'user_agent' => $this->metadataBag->get('user_agent'),
+            'user_id'    => $this->metadataBag->get('user_id'),
         ];
 
-        // Write
-        $this->driver->write($this->id, $payload, $metadata);
-
-        // Unlock
-        $this->driver->unlock($this->id);
-
-        $this->started = false;
+        $success = $this->driver->write($this->sessionId, $serialized, $metadata);
+        
+        $this->driver->unlock($this->sessionId);
+        
+        $this->sessionStarted = false;
+        return $success;
     }
 
     public function regenerate(bool $destroy = false): bool
     {
-        if (!$this->started) {
-            return false;
+        if (!$this->sessionStarted) {
+            $this->start();
         }
 
-        $oldId = $this->id;
+        $oldId = $this->sessionId;
+        $this->sessionId = $this->generateId();
 
-        // Generate new ID
-        $this->id = $this->generateId();
-
-        // If destroy is true, we delete the old session data completely
         if ($destroy) {
             $this->driver->destroy($oldId);
         } else {
             $this->driver->unlock($oldId);
-
-            // Acquire lock for new ID immediately
-            if (!$this->driver->lock($this->id)) {
-                throw SessionException::driverFailed('lock', 'Could not acquire lock for regenerated session');
-            }
         }
+
+        if (!$this->driver->lock($this->sessionId)) {
+            throw SessionException::driverFailed('lock', 'Could not acquire lock for regenerated session');
+        }
+        
+        $this->metadataBag->set('created_at', time());
 
         return true;
     }
 
-    public function getId(): ?string
+    public function invalidate(): bool
     {
-        return $this->id;
-    }
-
-    public function getBag(): ?SessionBag
-    {
-        return $this->bag;
-    }
-
-    public function isStarted(): bool
-    {
-        return $this->started;
+        $this->attributeBag->clear();
+        $this->flashBag->clear();
+        $this->metadataBag->clear();
+        
+        return $this->regenerate(true);
     }
 
     private function generateId(): string
     {
-        return bin2hex(random_bytes(16));
+        return bin2hex(random_bytes(20));
     }
 
-    // -- Proxy methods to Bag for easier usage --
+    // ── Interface Proxy Methods ─────────────────────────────────
 
     public function get(string $key, mixed $default = null): mixed
     {
-        return $this->bag?->get($key, $default) ?? $default;
+        return $this->attributes->get($key, $default);
     }
 
-    public function set(string|array $key, mixed $value = null): void
+    public function set(string $key, mixed $value): void
     {
-        $this->bag?->put($key, $value);
-    }
-
-    public function forget(string $key): void
-    {
-        $this->bag?->forget($key);
-    }
-
-    public function flash(string $key, mixed $value = true): void
-    {
-        $this->bag?->flash($key, $value);
-    }
-
-    public function getFlash(string $key, mixed $default = null): mixed
-    {
-        return $this->bag?->getFlash($key, $default) ?? $default;
-    }
-
-    public function reflash(): void
-    {
-        $this->bag?->reflash();
+        $this->attributes->set($key, $value);
     }
 
     public function has(string $key): bool
     {
-        return $this->bag?->has($key) ?? false;
+        return $this->attributes->has($key);
     }
 
-    // -- Metadata Setters --
-
-    public function setIpAddress(?string $ipAddress): void
+    public function remove(string $key): void
     {
-        $this->ipAddress = $ipAddress;
+        $this->attributes->forget($key);
     }
 
-    public function getIpAddress(): ?string
+    public function pull(string $key, mixed $default = null): mixed
     {
-        return $this->ipAddress;
+        return $this->attributes->pull($key, $default);
     }
 
-    public function setUserAgent(?string $userAgent): void
+    public function flash(string $key, mixed $value): void
     {
-        $this->userAgent = $userAgent;
+        $this->flashes->set($key, $value);
     }
 
-    public function getUserAgent(): ?string
+    public function reflash(): void
     {
-        return $this->userAgent;
+        $this->flashes->reflash();
     }
 
-    public function setUserId(string|int|null $userId): void
+    public function keep(string ...$keys): void
     {
-        $this->userId = $userId;
+        $this->flashes->keep(...$keys);
     }
 
-    public function getUserId(): string|int|null
+    public function now(string $key, mixed $value): void
     {
-        return $this->userId;
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function token(): string
-    {
-        return $this->get('_token');
-    }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function regenerateToken(): void
-    {
-        $this->set('_token', bin2hex(random_bytes(40)));
+        $this->flashes->now($key, $value);
     }
 
     public function all(): array
     {
-        return $this->bag?->all() ?? [];
+        return $this->attributes->all();
+    }
+
+    public function token(): string
+    {
+        return (string) $this->attributes->get('_token', '');
+    }
+
+    public function regenerateToken(): void
+    {
+        $this->attributes->set('_token', bin2hex(random_bytes(40)));
+    }
+
+    // ── Legacy IDE Proxy Methods (Fixes PHP2414) ────────────────
+    // Because some IDEs/parsers cache the older non-hook version 
+    // of SessionInterface, adding these fulfills the phantom AST.
+
+    public function destroy(): bool
+    {
+        return $this->invalidate();
+    }
+
+    public function getId(): ?string
+    {
+        return $this->sessionId ?: null;
+    }
+
+    public function isStarted(): bool
+    {
+        return $this->sessionStarted;
+    }
+
+    public function setId(string $id): void
+    {
+        $this->sessionId = $id;
     }
 }

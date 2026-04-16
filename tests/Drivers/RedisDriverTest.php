@@ -18,6 +18,9 @@ class RedisDriverTest extends TestCase
 
     protected function setUp(): void
     {
+        if (!class_exists(\Redis::class)) {
+            $this->markTestSkipped('Redis PHP extension is not installed.');
+        }
         $this->redis = $this->createMock(Redis::class);
         $this->driver = new RedisDriver($this->redis);
     }

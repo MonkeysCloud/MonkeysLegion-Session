@@ -40,7 +40,7 @@ class SessionManagerTest extends TestCase
     public function testStartExistingSession(): void
     {
         $id = 'existing_sess';
-        $payload = serialize(['key' => 'val']);
+        $payload = serialize(['_attributes' => ['key' => 'val']]);
 
         $this->driver->expects($this->once())
             ->method('lock')
@@ -52,7 +52,8 @@ class SessionManagerTest extends TestCase
             ->with($id)
             ->willReturn(['payload' => $payload, 'flash_data' => '[]']);
 
-        $this->manager->start($id);
+        $this->manager->id = $id;
+        $this->manager->start();
 
         $this->assertEquals('val', $this->manager->get('key'));
     }
@@ -70,7 +71,8 @@ class SessionManagerTest extends TestCase
             ->with(
                 $this->anything(),
                 $this->callback(function ($p) {
-                    return unserialize($p)['foo'] === 'bar';
+                    $unserialized = unserialize($p);
+                    return isset($unserialized['_attributes']['foo']) && $unserialized['_attributes']['foo'] === 'bar';
                 }),
                 $this->anything()
             )

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session\Tests\Drivers;
 
-use MonkeysLegion\Query\QueryBuilder;
+use MonkeysLegion\Query\Query\QueryBuilder;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
 use ReflectionProperty;
 
@@ -14,7 +14,7 @@ class TestDatabaseDriverTest extends DatabaseDriverTest
     protected function makeDriverWithRealQueryBuilder(QueryBuilder $qb): DatabaseDriver
     {
         // We need to use the full namespace for the class we just created
-        $driver = new TestDatabaseDriver($this->conn, ['table' => 'sessions']);
+        $driver = new TestDatabaseDriver($this->manager, ['table' => 'sessions']);
 
         $ref = new ReflectionProperty(DatabaseDriver::class, 'queryBuilder');
         $ref->setValue($driver, $qb);
