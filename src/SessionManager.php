@@ -19,11 +19,20 @@ class SessionManager implements SessionInterface
     private string|int|null $userId = null;
     private DataHandlerInterface $dataHandler;
 
+    private string $name;
+
     public function __construct(
         private readonly SessionDriverInterface $driver,
-        ?DataHandlerInterface $dataHandler = null
+        ?DataHandlerInterface $dataHandler = null,
+        string $sessionName = 'ml_session'
     ) {
         $this->dataHandler = $dataHandler ?: new NativeSerializer();
+        $this->name = $sessionName;
+    }
+
+    public function getName(): string
+    {
+        return $this->name;
     }
 
     public string $id {

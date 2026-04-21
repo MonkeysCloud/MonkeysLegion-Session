@@ -15,6 +15,11 @@ interface SessionInterface
      * Whether the session has been started successfully.
      */
     public bool $isStarted { get; }
+    
+    /**
+     * Get the session (cookie) name.
+     */
+    public function getName(): string;
 
     /**
      * Start or resume the session.

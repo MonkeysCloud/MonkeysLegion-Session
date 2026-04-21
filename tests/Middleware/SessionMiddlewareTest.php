@@ -26,6 +26,7 @@ class SessionMiddlewareTest extends TestCase
         $response = $this->createMock(ResponseInterface::class);
 
         $middleware = new SessionMiddleware($manager);
+        $manager->method('getName')->willReturn('ml_session');
 
         // 1. Cookie Extraction
         $request->method('withAttribute')->willReturnSelf();

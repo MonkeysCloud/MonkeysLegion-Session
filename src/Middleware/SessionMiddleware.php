@@ -19,7 +19,6 @@ class SessionMiddleware implements MiddlewareInterface
         array $config = []
     ) {
         $this->config = array_merge([
-            'cookie_name' => 'ml_session',
             'cookie_lifetime' => 7200, // 2 hours
             'cookie_path' => '/',
             'cookie_domain' => '',
@@ -33,7 +32,7 @@ class SessionMiddleware implements MiddlewareInterface
     {
         // 1. Get Session ID from Cookie
         $cookies = $request->getCookieParams();
-        $id = $cookies[$this->config['cookie_name']] ?? null;
+        $id = $cookies[$this->manager->getName()] ?? null;
 
         // 2. Set Context and Start
         $this->manager->start($id ?? '');
@@ -78,7 +77,7 @@ class SessionMiddleware implements MiddlewareInterface
     {
         $cookieValue = sprintf(
             '%s=%s; Path=%s; Max-Age=%d; %s%sSameSite=%s',
-            $this->config['cookie_name'],
+            $this->manager->getName(),
             $sessionId,
             $this->config['cookie_path'],
             $this->config['cookie_lifetime'],
