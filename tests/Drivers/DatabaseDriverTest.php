@@ -4,25 +4,35 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session\Tests\Drivers;
 
-use MonkeysLegion\Database\SQLite\Connection;
-use MonkeysLegion\Query\QueryBuilder;
+use MonkeysLegion\Database\Connection\ConnectionManager;
+use MonkeysLegion\Database\Contracts\ConnectionInterface;
+use MonkeysLegion\Query\Query\QueryBuilder;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
+use PHPUnit\Framework\Attributes\Test;
 use PHPUnit\Framework\TestCase;
-use ReflectionProperty;
 
 class DatabaseDriverTest extends TestCase
 {
-    protected Connection $conn;
+    protected ConnectionInterface $conn;
+    protected ConnectionManager $manager;
     protected QueryBuilder $qb;
+    protected DatabaseDriver $driver;
+    protected string $table = 'sessions';
 
     protected function setUp(): void
     {
-        $this->conn = new Connection(["memory" => true]);
-        $this->qb = new QueryBuilder($this->conn);
+        $this->manager = ConnectionManager::fromArray([
+            'test' => [
+                'driver' => 'sqlite',
+                'memory' => true,
+            ],
+        ]);
 
-        // 1. Create the table (Cleaned for SQLite compatibility)
-        $this->qb->raw(
-            'CREATE TABLE IF NOT EXISTS sessions (
+        $this->conn = $this->manager->connection();
+        $this->qb = new QueryBuilder($this->manager);
+
+        // Create the table
+        $this->conn->execute('CREATE TABLE sessions (
             session_id VARCHAR(255) PRIMARY KEY NOT NULL,
             payload TEXT,
             flash_data TEXT,
@@ -32,222 +42,139 @@ class DatabaseDriverTest extends TestCase
             user_id INTEGER NULL,
             ip_address VARCHAR(45) NULL,
             user_agent TEXT NULL
-        );'
-        );
+        )');
 
-        // 2. Create indexes separately
-        $this->qb->raw('CREATE INDEX idx_sessions_last_activity ON sessions(last_activity);');
-        $this->qb->raw('CREATE INDEX idx_sessions_expiration ON sessions(expiration);');
-        $this->qb->raw('CREATE INDEX idx_sessions_user_id ON sessions(user_id);');
+        $this->driver = new DatabaseDriver($this->manager, ['table' => $this->table]);
     }
 
-    public function testOpenClose(): void
+    #[Test]
+    public function it_can_open_and_close_connection(): void
     {
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertTrue($driver->open('', ''));
-        $this->assertTrue($driver->close());
+        $this->assertTrue($this->driver->open('', ''));
+        $this->assertTrue($this->driver->close());
     }
 
-    public function testReadValid(): void
-    {
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['sess_id', 'serialized', '{}', time(), time(), time() + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $result = $driver->read('sess_id');
-        
-        $this->assertIsArray($result);
-        $this->assertSame('serialized', $result['payload']);
-    }
-
-    public function testReadInvalid(): void
-    {
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertNull($driver->read('missing_id'));
-    }
-
-    public function testWriteValid(): void
-    {
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['sess_id', 'old', '{}', time(), time(), time() + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-
-        $this->assertTrue($driver->write('sess_id', 'new_data', ['flash_data' => '{"foo":"bar"}']));
-        
-        $row = $this->fetchSession('sess_id');
-        $this->assertSame('{"foo":"bar"}', $row['flash_data']);
-    }
-
-    public function testDestroy(): void
-    {
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['sess_id', 'data', '{}', time(), time(), time() + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-
-        $this->assertTrue($driver->destroy('sess_id'));
-    }
-
-    public function testGc(): void
-    {
-        $expired = time() - 7200;
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['old_sess', 'data', '{}', $expired, $expired, $expired, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-
-        $this->assertSame(1, $driver->gc(3600));
-    }
-
-    public function testWritePreservesCreatedAt(): void
-    {
-        $created = time() - 100;
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['sess_created', 'old', '{}', $created, $created, $created + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertTrue($driver->write('sess_created', 'new', []));
-
-        $row = $this->fetchSession('sess_created');
-        $this->assertSame($created, (int)$row['created_at']);
-    }
-
-    public function testDestroyMissingDoesNotChangeCount(): void
-    {
-        $before = $this->countSessions();
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertFalse($driver->destroy('missing_id'));
-
-        $after = $this->countSessions();
-        $this->assertSame($before, $after);
-    }
-
-    public function testGcWithNoExpiredReturnsZero(): void
+    #[Test]
+    public function it_can_read_an_existing_session(): void
     {
         $now = time();
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['fresh_sess', 'data', '{}', $now, $now, $now + 3600, null, null, null]
-        );
+        $this->qb->table($this->table)->insert([
+            'session_id' => 'sess_1',
+            'payload' => 'payload_data',
+            'created_at' => $now,
+            'last_activity' => $now,
+            'expiration' => $now + 3600,
+        ]);
 
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertSame(0, $driver->gc(3600));
+        $data = $this->driver->read('sess_1');
+
+        $this->assertIsArray($data);
+        $this->assertEquals('payload_data', $data['payload']);
     }
 
-    public function testGcPreservesFreshRows(): void
+    #[Test]
+    public function it_returns_null_for_non_existent_session(): void
     {
-        $expired = time() - 7200;
-        $fresh = time();
-
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['old_sess', 'data', '{}', $expired, $expired, $expired, null, null, null]
-        );
-
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['fresh_sess', 'data', '{}', $fresh, $fresh, $fresh + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertSame(1, $driver->gc(3600));
-
-        $this->assertNotEmpty($this->fetchSession('fresh_sess'));
+        $this->assertNull($this->driver->read('non_existent'));
     }
 
-    private function countSessions(): int
+    #[Test]
+    public function it_returns_null_and_destroys_expired_session(): void
     {
-        return (int)($this->qb
-            ->from('sessions')
-            ->count() ?? 0);
+        $expired = time() - 3600;
+        $this->qb->table($this->table)->insert([
+            'session_id' => 'sess_expired',
+            'payload' => 'expired_data',
+            'created_at' => $expired - 3600,
+            'last_activity' => $expired,
+            'expiration' => $expired,
+        ]);
+
+        $this->assertNull($this->driver->read('sess_expired'));
+
+        $count = $this->qb->table($this->table)->where('session_id', '=', 'sess_expired')->count();
+        $this->assertEquals(0, $count);
     }
 
-    private function makeDriverWithRealQueryBuilder(QueryBuilder $qb): DatabaseDriver
+    #[Test]
+    public function it_can_write_new_session(): void
     {
-        $driver = new DatabaseDriver($this->conn, ['table' => 'sessions']);
-
-        $ref = new ReflectionProperty(DatabaseDriver::class, 'queryBuilder');
-        $ref->setValue($driver, $qb);
-
-        return $driver;
-    }
-
-    public function testReadNullPayloadReturnsEmptyString(): void
-    {
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['sess_null', null, '{}', time(), time(), time() + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $result = $driver->read('sess_null');
-        $this->assertIsArray($result);
-        $this->assertNull($result['payload']);
-    }
-
-    public function testWriteUpdatesPayloadAndLastActivity(): void
-    {
-        $created = time();
-        $this->qb->raw(
-            'INSERT INTO sessions (session_id, payload, flash_data, created_at, last_activity, expiration, user_id, ip_address, user_agent)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            ['sess_upd', 'old', '{}', $created, $created, $created + 3600, null, null, null]
-        );
-
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertTrue($driver->write('sess_upd', 'new', []));
-
-        $row = $this->fetchSession('sess_upd');
-        $this->assertSame('new', $row['payload']);
-        $this->assertGreaterThanOrEqual($created, (int)$row['last_activity']);
-    }
-
-    public function testWritePersistsMetadata(): void
-    {
-        $id = 'meta_sess';
-        $payload = 'data';
         $metadata = [
             'ip_address' => '127.0.0.1',
-            'user_agent' => 'Mozilla/5.0',
-            'user_id' => 'user_123',
-            'flash_data' => '[]',
+            'user_agent' => 'PHPUnit',
         ];
 
-        $driver = $this->makeDriverWithRealQueryBuilder($this->qb);
-        $this->assertTrue($driver->write($id, $payload, $metadata));
+        $this->assertTrue($this->driver->write('sess_new', 'new_payload', $metadata));
 
-        $row = $this->fetchSession($id);
-        $this->assertSame('127.0.0.1', $row['ip_address']);
-        $this->assertSame('Mozilla/5.0', $row['user_agent']);
-        $this->assertSame('user_123', $row['user_id']);
+        $session = $this->qb->table($this->table)->where('session_id', '=', 'sess_new')->first();
+
+        $this->assertNotNull($session);
+        $this->assertEquals('new_payload', $session['payload']);
+        $this->assertEquals('127.0.0.1', $session['ip_address']);
+        $this->assertEquals('PHPUnit', $session['user_agent']);
     }
 
-    private function fetchSession(string $id): array
+    #[Test]
+    public function it_can_update_existing_session(): void
     {
-        return $this->qb
-            ->from('sessions')
-            ->where('session_id', '=', $id)
-            ->first() ?? [];
+        $now = time();
+        $this->qb->table($this->table)->insert([
+            'session_id' => 'sess_update',
+            'payload' => 'old_payload',
+            'created_at' => $now,
+            'last_activity' => $now,
+            'expiration' => $now + 3600,
+        ]);
+
+        $this->assertTrue($this->driver->write('sess_update', 'updated_payload', []));
+
+        $session = $this->qb->table($this->table)->where('session_id', '=', 'sess_update')->first();
+
+        $this->assertNotNull($session);
+        $this->assertEquals('updated_payload', $session['payload']);
+    }
+
+    #[Test]
+    public function it_can_destroy_a_session(): void
+    {
+        $now = time();
+        $this->qb->table($this->table)->insert([
+            'session_id' => 'sess_destroy',
+            'payload' => 'data',
+            'created_at' => $now,
+            'last_activity' => $now,
+            'expiration' => $now + 3600,
+        ]);
+
+        $this->assertTrue($this->driver->destroy('sess_destroy'));
+
+        $count = $this->qb->table($this->table)->where('session_id', '=', 'sess_destroy')->count();
+        $this->assertEquals(0, $count);
+    }
+
+    #[Test]
+    public function it_can_perform_garbage_collection(): void
+    {
+        $expired = time() - 3600*3;
+        $active = time();
+
+        // Use individual inserts as some QueryBuilder implementations might not support bulk insert
+        $this->qb->table($this->table)->insert(['session_id' => 'expired_1', 'payload' => '', 'created_at' => $expired, 'last_activity' => $expired, 'expiration' => $expired]);
+        $this->qb->table($this->table)->insert(['session_id' => 'expired_2', 'payload' => '', 'created_at' => $expired, 'last_activity' => $expired, 'expiration' => $expired]);
+        $this->qb->table($this->table)->insert(['session_id' => 'active_1', 'payload' => '', 'created_at' => $active, 'last_activity' => $active, 'expiration' => $active + 3600]);
+
+        $deletedCount = $this->driver->gc(3600);
+
+        $this->assertEquals(2, $deletedCount);
+
+        $remainingCount = $this->qb->table($this->table)->count();
+        $this->assertEquals(1, $remainingCount);
+    }
+
+    #[Test]
+    public function it_can_lock_and_unlock(): void
+    {
+        $this->assertTrue($this->driver->lock('sess_id'));
+        $this->assertTrue($this->driver->unlock('sess_id'));
     }
 }

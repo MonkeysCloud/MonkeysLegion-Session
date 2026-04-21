@@ -36,7 +36,118 @@ To prevent session hijacking, we store and verify these browser/network traits:
 
 ---
 
-## 4. Architecture Overview
+## 4. Setup
+
+### 1. Installation
+
+Install the package via Composer:
+
+```bash
+composer require monkeyscloud/monkeyslegion-session
+```
+
+### 2. Publish Configuration
+
+Run the following command to publish the configuration file. You can choose between **MLC** and **PHP** formats:
+
+```bash
+php mlc session:publish
+```
+
+#### MLC Format (`config/session.mlc`)
+```text
+session {
+    # The default session driver to use.
+    default env(SESSION_DRIVER, 'file')
+
+    drivers {
+        file {
+            path => env(SESSION_FILE_PATH, base_path('var/sessions'))
+            lifetime => env(SESSION_LIFETIME, 7200)
+        }
+        database {
+            table => env(SESSION_TABLE, 'sessions')
+            lifetime => env(SESSION_LIFETIME, 7200)
+        }
+        redis {
+            connection => env(REDIS_SESSION_CONNECTION, 'default')
+            lifetime => env(SESSION_LIFETIME, 7200)
+        }
+    }
+
+    cookie_name => env(SESSION_COOKIE_NAME, 'ml_session')
+    cookie_lifetime => env(SESSION_COOKIE_LIFETIME, 7200)
+    cookie_path => env(SESSION_COOKIE_PATH, '/')
+    cookie_domain => env(SESSION_COOKIE_DOMAIN, '')
+    cookie_secure => env(SESSION_COOKIE_SECURE, true)
+    cookie_httponly => env(SESSION_COOKIE_HTTPONLY, true)
+    cookie_samesite => env(SESSION_COOKIE_SAMESITE, 'Lax')
+
+    encrypt => env(SESSION_ENCRYPT, false)
+
+    keys {
+        main_key => env(APP_KEY, null)
+    }
+}
+```
+
+#### PHP Format (`config/session.php`)
+```php
+return [
+    'session' => [
+        'default' => $_ENV['SESSION_DRIVER'] ?? 'file',
+        'drivers' => [
+            'file' => [
+                'path' => $_ENV['SESSION_FILE_PATH'] ?? base_path('var/sessions'),
+                'lifetime' => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
+            ],
+            // ... other drivers
+        ],
+        // ... cookie and encryption settings
+    ]
+];
+```
+
+### 3. Database Driver Setup
+
+If you plan to use the `database` driver, you need to create the sessions table. You can use the provided migration file or create it manually:
+
+```sql
+CREATE TABLE sessions (
+    session_id VARCHAR(255) PRIMARY KEY NOT NULL,
+    payload TEXT,
+    flash_data TEXT,
+    created_at INTEGER NOT NULL,
+    last_activity INTEGER NOT NULL,
+    expiration INTEGER NOT NULL,
+    user_id INTEGER NULL,
+    ip_address VARCHAR(45) NULL,
+    user_agent TEXT NULL
+);
+```
+
+### 4. Middleware Registration
+
+Add the `SessionMiddleware` to your application's middleware stack to enable session support:
+
+```php
+use MonkeysLegion\Session\Middleware\SessionMiddleware;
+
+// Register in your global or route-specific middleware pipeline
+$pipeline->add(SessionMiddleware::class);
+```
+
+To enable CSRF protection, also add the `VerifyCsrfToken` middleware:
+
+```php
+use MonkeysLegion\Session\Middleware\VerifyCsrfToken;
+
+$pipeline->add(VerifyCsrfToken::class);
+```
+
+---
+
+## 5. Architecture Overview
 
 ### SessionDriverInterface
 
@@ -83,7 +194,7 @@ The `SessionManager` is the high-level class your application code will actually
 
 ---
 
-## 5. Session Middleware: The Request Lifecycle
+## 6. Session Middleware: The Request Lifecycle
 
 The Middleware bridges the HTTP Request/Response with the Session Manager. It ensures data is consistent and atomic.
 
@@ -114,14 +225,15 @@ Since we are using **Atomic Locking**, the Middleware must be careful. If an exc
 
 ---
 
-## 6. Project Structure
+## 7. Project Structure
 
 Since we are aligning with the **monkeyslegion-** ecosystem, the architecture needs to be modular, interface-driven, and ready for PSR-11 (Dependency Injection).
 
 ```text
 monkeyslegion-session/
 ├── config/
-│   └── session.php                # Session configuration options
+│   ├── session.mlc                # Recommended MLC configuration
+│   └── session.php                # Optional PHP configuration
 ├── docs/
 │   └── usage.md                   # Usage documentation and examples
 ├── migrations/
@@ -135,7 +247,7 @@ monkeyslegion-session/
 │   │   ├── SessionDriverInterface.php # Storage driver contract (with lock/unlock)
 │   │   └── SessionInterface.php       # Session manager API contract
 │   ├── Drivers/
-│   │   ├── DatabaseDriver.php         # PDO/DB session storage implementation
+│   │   ├── DatabaseDriver.php         # Database session storage using ConnectionManager
 │   │   ├── FileDriver.php             # Filesystem session storage implementation
 │   │   └── RedisDriver.php            # Redis session storage implementation
 │   ├── EncryptedSerializer.php        # AES-256-GCM encryption layer (implements DataHandlerInterface)
@@ -169,55 +281,9 @@ This class should be injected into your Middleware or Controllers.
 
 #### 3. The `Driver` Implementations
 
-- **Database:** Needs a table with `id` (string), `payload` (text), and `last_activity` (integer/timestamp).
+- **Database:** Uses `monkeyslegion-database` to store sessions in a table with appropriate schema (id, payload, etc.).
 - **Redis:** Should use `EXPIRE` to let Redis handle the "Garbage Collection" automatically.
 - **File:** Needs `flock()` to handle the **Atomic Locking**.
-
----
-
-## Roadmap
-
-### Phase 1: Core Foundation
-
-- [x] Implement `SessionInterface` contract
-- [x] Implement `DriverInterface` contract
-- [x] Create `SessionBag` with dot notation support
-- [x] Create `SessionManager` orchestrator
-- [x] Add basic exception handling
-
-### Phase 2: Driver Implementations
-
-- [x] Implement `FileDriver` with `flock()` support
-- [x] Implement `DatabaseDriver` with PDO
-- [x] Implement `RedisDriver` with atomic operations
-- [x] Add driver-specific tests
-
-### Phase 3: Middleware & Integration
-
-- [x] Implement PSR-15 `SessionMiddleware`
-- [x] Add atomic locking with `finally` block
-- [x] Cookie management (secure, httpOnly, sameSite)
-
-### Phase 4: Security Features
-
-- [/] User-Agent validation (implemented in Middleware/Manager)
-- [/] IP address validation (implemented in Middleware/Manager)
-- [x] CSRF token generation and validation
-- [x] Session fixation prevention (via `regenerate()`)
-
-### Phase 5: Advanced Features
-
-- [x] Flash data management
-- [x] Garbage collection automation
-- [x] Session encryption option (AES-256-GCM)
-- [x] PSR-11 container integration (via Factory/Service providers)
-
-### Phase 6: Documentation & Release
-
-- [x] Complete API documentation
-- [x] Usage examples and tutorials
-- [ ] Performance benchmarks
-- [x] v1.0.0 stable release
 
 ---
 

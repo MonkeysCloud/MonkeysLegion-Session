@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace MonkeysLegion\Session\Contracts;
 
+/**
+ * Interface SessionDriverInterface
+ */
 interface SessionDriverInterface
 {
     /**
@@ -26,7 +29,7 @@ interface SessionDriverInterface
      * Retrieve serialized session data by ID.
      *
      * @param string $id The session ID
-     * @return array|null The session data (payload + metadata), or null if not found
+     * @return array<string, mixed>|null The session data (payload + metadata), or null if not found
      */
     public function read(string $id): ?array;
 
@@ -35,7 +38,7 @@ interface SessionDriverInterface
      *
      * @param string $id The session ID
      * @param string $payload The serialized session data
-     * @param array $metadata Additional metadata (flash, created_at, etc.)
+     * @param array<string, mixed> $metadata Additional metadata (flash, created_at, etc.)
      * @return bool True on success
      */
     public function write(string $id, string $payload, array $metadata): bool;

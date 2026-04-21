@@ -44,12 +44,13 @@ class VerifyCsrfTokenTest extends TestCase
             $request = $this->createMock(ServerRequestInterface::class);
             $request->method('getMethod')->willReturn($method);
 
-            $this->handler->expects($this->atLeastOnce())
+            $handler = $this->createMock(RequestHandlerInterface::class);
+            $handler->expects($this->once())
                 ->method('handle')
                 ->with($request)
                 ->willReturn($this->response);
 
-            $this->middleware->process($request, $this->handler);
+            $this->middleware->process($request, $handler);
         }
     }
 

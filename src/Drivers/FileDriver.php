@@ -8,16 +8,21 @@ use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 use MonkeysLegion\Session\Exceptions\SessionException;
 use MonkeysLegion\Session\Exceptions\SessionLockException;
 
+/**
+ * File-based session driver.
+ */
 class FileDriver implements SessionDriverInterface
 {
     private string $path;
     private int $ttl;
+    
+    /** @var array<string, bool> */
     private array $locks = [];
+    
+    /** @var array<string, resource> */
     private array $lockHandles = [];
 
     /**
-     * Create a new File driver instance.
-     *
      * @param string $path The directory path where session files are stored
      * @param int $ttl Session time-to-live in seconds (default: 7200)
      */
@@ -26,14 +31,12 @@ class FileDriver implements SessionDriverInterface
         $this->path = rtrim($path, '/\\');
         $this->ttl = $ttl;
 
-        // Ensure the directory exists
         if (!is_dir($this->path)) {
-            if (!mkdir($this->path, 0755, true) && !is_dir($this->path)) {
+            if (!@mkdir($this->path, 0755, true) && !is_dir($this->path)) {
                 throw SessionException::driverFailed('open', "Failed to create session directory: {$this->path}");
             }
         }
 
-        // Ensure the directory is writable
         if (!is_writable($this->path)) {
             throw SessionException::driverFailed('open', "Session directory is not writable: {$this->path}");
         }
@@ -45,8 +48,8 @@ class FileDriver implements SessionDriverInterface
             if (!empty($this->locks)) {
                 $this->close();
             }
-        } catch (\Throwable $e) {
-            // Silence errors in destructor to prevent "Fatal error during shutdown"
+        } catch (\Throwable) {
+            // Silence errors in destructor
         }
     }
 
@@ -55,7 +58,6 @@ class FileDriver implements SessionDriverInterface
      */
     public function open(string $path, string $name): bool
     {
-        // Directory is already validated in constructor
         return true;
     }
 
@@ -64,9 +66,8 @@ class FileDriver implements SessionDriverInterface
      */
     public function close(): bool
     {
-        // Release all locks before closing
         foreach (array_keys($this->locks) as $id) {
-            $this->unlock($id);
+            $this->unlock((string)$id);
         }
 
         return true;
@@ -89,15 +90,14 @@ class FileDriver implements SessionDriverInterface
             throw SessionException::driverFailed('read', "Failed to read session file: {$filepath}");
         }
 
-        // Parse the session file (format: JSON with metadata)
+        /** @var mixed $session */
         $session = json_decode($content, true);
 
-        if (json_last_error() !== JSON_ERROR_NONE) {
-            // Treat corrupted file as missing session
+        if (json_last_error() !== JSON_ERROR_NONE || !is_array($session)) {
             return null;
         }
 
-        // Update last activity time
+        /** @var array<string, mixed> $session */
         $session['last_activity'] = time();
         $this->saveSessionFile($filepath, $session);
 
@@ -111,23 +111,23 @@ class FileDriver implements SessionDriverInterface
     {
         $filepath = $this->getFilePath($id);
 
-        // Read existing session to preserve other metadata if needed
+        /** @var array<string, mixed> $session */
         $session = [];
         if (file_exists($filepath)) {
             $content = @file_get_contents($filepath);
             if ($content !== false) {
-                $session = json_decode($content, true) ?? [];
+                /** @var mixed $decoded */
+                $decoded = json_decode($content, true);
+                $session = is_array($decoded) ? $decoded : [];
             }
         } else {
              $session['created_at'] = time();
              $session['session_id'] = $id;
         }
 
-        // Merge new data
         $session['payload'] = $payload;
         $session['last_activity'] = time();
         
-        // Merge allowed metadata
         $session = array_merge($session, $metadata);
 
         return $this->saveSessionFile($filepath, $session);
@@ -141,17 +141,14 @@ class FileDriver implements SessionDriverInterface
         $filepath = $this->getFilePath($id);
         $lockFilepath = $this->getLockFilePath($id);
 
-        // Unlock first if locked
         if (isset($this->locks[$id])) {
             $this->unlock($id);
         }
 
-        // Delete session file
         if (file_exists($filepath)) {
             @unlink($filepath);
         }
 
-        // Delete lock file
         if (file_exists($lockFilepath)) {
             @unlink($lockFilepath);
         }
@@ -168,34 +165,33 @@ class FileDriver implements SessionDriverInterface
         $count = 0;
 
         try {
-            $files = glob($this->path . '/sess_*');
+            $pattern = $this->path . '/sess_*';
+            $files = glob($pattern);
 
             if ($files === false) {
                 return false;
             }
 
             foreach ($files as $file) {
-                // Skip lock files
-                if (str_ends_with($file, '.lock')) {
+                if (str_ends_with($file, '.lock') || str_ends_with($file, '.tmp')) {
                     continue;
                 }
 
                 $content = @file_get_contents($file);
-
                 if ($content === false) {
                     continue;
                 }
 
+                /** @var mixed $session */
                 $session = json_decode($content, true);
-
-                if (json_last_error() !== JSON_ERROR_NONE) {
+                if (!is_array($session)) {
                     continue;
                 }
 
-                // Check if session has expired based on last_activity
-                if (isset($session['last_activity']) && $session['last_activity'] < $threshold) {
+                /** @var mixed $lastActivity */
+                $lastActivity = $session['last_activity'] ?? 0;
+                if (is_numeric($lastActivity) && (int)$lastActivity < $threshold) {
                     @unlink($file);
-                    // Also remove lock file if exists
                     $lockFile = $file . '.lock';
                     if (file_exists($lockFile)) {
                         @unlink($lockFile);
@@ -205,7 +201,7 @@ class FileDriver implements SessionDriverInterface
             }
 
             return $count;
-        } catch (\Throwable $e) {
+        } catch (\Throwable) {
             return false;
         }
     }
@@ -215,7 +211,6 @@ class FileDriver implements SessionDriverInterface
      */
     public function lock(string $id, int $timeout = 30): bool
     {
-        // If already locked by this instance, don't re-lock
         if (isset($this->locks[$id])) {
             throw SessionLockException::alreadyLocked($id);
         }
@@ -223,24 +218,20 @@ class FileDriver implements SessionDriverInterface
         $lockFilepath = $this->getLockFilePath($id);
         $deadline = microtime(true) + $timeout;
 
-        // Try to acquire lock with retry
         while (microtime(true) < $deadline) {
-            // Open lock file (create if doesn't exist)
+            /** @var resource|false $handle */
             $handle = @fopen($lockFilepath, 'c+');
 
             if ($handle === false) {
                 throw SessionLockException::acquisitionFailed($id, 'Failed to open lock file');
             }
 
-            // Try to acquire exclusive lock (non-blocking)
             if (flock($handle, LOCK_EX | LOCK_NB)) {
-                // Lock acquired successfully
                 $this->locks[$id] = true;
                 $this->lockHandles[$id] = $handle;
 
-                // Write lock metadata
                 ftruncate($handle, 0);
-                fwrite($handle, json_encode([
+                fwrite($handle, (string)json_encode([
                     'pid' => getmypid(),
                     'time' => time(),
                 ]));
@@ -249,10 +240,7 @@ class FileDriver implements SessionDriverInterface
                 return true;
             }
 
-            // Lock not acquired, close handle and retry
             fclose($handle);
-
-            // Exponential backoff
             usleep(50000); // 50ms
         }
 
@@ -265,23 +253,18 @@ class FileDriver implements SessionDriverInterface
     public function unlock(string $id): bool
     {
         if (!isset($this->locks[$id])) {
-            // Silently return true if not locked by this instance
             return true;
         }
 
         if (isset($this->lockHandles[$id])) {
             $handle = $this->lockHandles[$id];
-
-            // Release the lock
             flock($handle, LOCK_UN);
             fclose($handle);
-
             unset($this->lockHandles[$id]);
         }
 
         unset($this->locks[$id]);
 
-        // Optionally remove the lock file
         $lockFilepath = $this->getLockFilePath($id);
         if (file_exists($lockFilepath)) {
             @unlink($lockFilepath);
@@ -290,44 +273,25 @@ class FileDriver implements SessionDriverInterface
         return true;
     }
 
-    /**
-     * Get the file path for a session ID.
-     *
-     * @param string $id
-     * @return string
-     */
     private function getFilePath(string $id): string
     {
         return $this->path . '/sess_' . $id;
     }
 
-    /**
-     * Get the lock file path for a session ID.
-     *
-     * @param string $id
-     * @return string
-     */
     private function getLockFilePath(string $id): string
     {
         return $this->path . '/sess_' . $id . '.lock';
     }
 
     /**
-     * Save session data to file with proper error handling.
-     *
      * @param string $filepath
-     * @param array $session
+     * @param array<string, mixed> $session
      * @return bool
      */
     private function saveSessionFile(string $filepath, array $session): bool
     {
         $json = json_encode($session, JSON_THROW_ON_ERROR);
 
-        if ($json === false) {
-            throw SessionException::serializationFailed(json_last_error_msg());
-        }
-
-        // Write atomically using temporary file
         $tempFile = $filepath . '.tmp';
         $bytes = @file_put_contents($tempFile, $json, LOCK_EX);
 
@@ -335,7 +299,6 @@ class FileDriver implements SessionDriverInterface
             throw SessionException::driverFailed('write', "Failed to write to temporary file: {$tempFile}");
         }
 
-        // Atomic rename
         if (!@rename($tempFile, $filepath)) {
             @unlink($tempFile);
             throw SessionException::driverFailed('write', "Failed to rename temporary file to: {$filepath}");
@@ -355,7 +318,7 @@ class FileDriver implements SessionDriverInterface
         $filepath = $this->getFilePath($id);
 
         if (file_exists($filepath)) {
-            return false; // Session already exists
+            return false;
         }
 
         $session = [
@@ -367,26 +330,5 @@ class FileDriver implements SessionDriverInterface
         ];
 
         return $this->saveSessionFile($filepath, $session);
-    }
-
-    /**
-     * Set the TTL for sessions.
-     *
-     * @param int $ttl Time-to-live in seconds
-     * @return void
-     */
-    public function setTtl(int $ttl): void
-    {
-        $this->ttl = $ttl;
-    }
-
-    /**
-     * Get the current TTL setting.
-     *
-     * @return int
-     */
-    public function getTtl(): int
-    {
-        return $this->ttl;
     }
 }

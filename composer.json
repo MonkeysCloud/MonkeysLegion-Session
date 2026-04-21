@@ -4,17 +4,21 @@
   "license": "MIT",
   "autoload": {
     "psr-4": {
-      "MonkeysLegion\\Session\\": "src/",
+      "MonkeysLegion\\Session\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
       "MonkeysLegion\\Session\\Tests\\": "tests/"
     }
   },
   "minimum-stability": "dev",
   "require": {
     "php": "^8.4",
-    "monkeyscloud/monkeyslegion-core": "^1.0",
-    "monkeyscloud/monkeyslegion-database": "^1.0",
-    "monkeyscloud/monkeyslegion-query": "^1.0",
-    "monkeyscloud/monkeyslegion-cli": "^1.0",
+    "monkeyscloud/monkeyslegion-core": "^2.0",
+    "monkeyscloud/monkeyslegion-database": "^2.0",
+    "monkeyscloud/monkeyslegion-query": "^2.0",
+    "monkeyscloud/monkeyslegion-cli": "^2.0",
     "psr/http-message": "^2.0",
     "psr/http-server-middleware": "^1.0",
     "psr/http-server-handler": "^1.0"
@@ -25,6 +29,7 @@
     }
   },
   "require-dev": {
+    "monkeyscloud/monkeyslegion-mlc": "^3.0@dev",
     "phpstan/phpstan": "^2.1",
     "phpunit/phpunit": "^13.1@dev"
   }

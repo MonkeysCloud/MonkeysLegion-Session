@@ -6,6 +6,8 @@ namespace MonkeysLegion\Session\Tests\Factory;
 
 use InvalidArgumentException;
 use MonkeysLegion\Database\Contracts\ConnectionInterface;
+use MonkeysLegion\Database\Contracts\ConnectionManagerInterface;
+use MonkeysLegion\Database\Types\DatabaseDriver as DriverType;
 use MonkeysLegion\Session\Drivers\DatabaseDriver;
 use MonkeysLegion\Session\Drivers\FileDriver;
 use MonkeysLegion\Session\Drivers\RedisDriver;
@@ -44,9 +46,15 @@ class DriverFactoryTest extends TestCase
 
     public function testMakeDatabaseDriver(): void
     {
-        $conn = $this->createMock(ConnectionInterface::class);
+        $conn = $this->createStub(ConnectionInterface::class);
+        // Stubs can still have return values configured
+        $conn->method('getDriver')->willReturn(DriverType::MySQL);
+
+        $manager = $this->createStub(ConnectionManagerInterface::class);
+        $manager->method('connection')->willReturn($conn);
+
         $driver = $this->factory->make('database', [
-            'connection' => $conn,
+            'connection' => $manager,
             'table' => 'sessions'
         ]);
 
@@ -62,7 +70,7 @@ class DriverFactoryTest extends TestCase
 
     public function testMakeRedisDriver(): void
     {
-        $redis = $this->createMock(Redis::class);
+        $redis = $this->createStub(Redis::class);
         $driver = $this->factory->make('redis', [
             'redis' => $redis,
             'prefix' => 'sess:',

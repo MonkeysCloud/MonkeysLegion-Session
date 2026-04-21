@@ -8,6 +8,9 @@ use MonkeysLegion\Session\Contracts\DataHandlerInterface;
 use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 use MonkeysLegion\Session\Exceptions\SessionException;
 
+/**
+ * High-level session manager.
+ */
 class SessionManager
 {
     private ?string $id = null;
@@ -16,10 +19,10 @@ class SessionManager
     private ?string $ipAddress = null;
     private ?string $userAgent = null;
     private string|int|null $userId = null;
-    private Contracts\DataHandlerInterface $dataHandler;
+    private readonly DataHandlerInterface $dataHandler;
 
     public function __construct(
-        private SessionDriverInterface $driver,
+        private readonly SessionDriverInterface $driver,
         ?DataHandlerInterface $dataHandler = null
     ) {
         $this->dataHandler = $dataHandler ?: new NativeSerializer();
@@ -33,38 +36,52 @@ class SessionManager
 
         $this->id = $id;
 
-        if (!$this->id) {
+        if ($this->id === null) {
             $this->id = $this->generateId();
         }
 
         // 1. Lock
         if (!$this->driver->lock($this->id)) {
-            // The driver implementation of lock() has a timeout and retries.
-            // If it returns false, it means timeout.
             throw SessionException::driverFailed('lock', 'Could not acquire session lock');
         }
 
         // 2. Read
         $data = $this->driver->read($this->id);
 
-        if ($data) {
+        /** @var array<string, mixed> $payload */
+        $payload = [];
+        /** @var array<string, mixed> $flash */
+        $flash = [];
+
+        if ($data !== null) {
             // Existing session
             try {
-                $payload = $this->dataHandler->restore($data['payload']);
+                /** @var mixed $rawPayload */
+                $rawPayload = $data['payload'] ?? '';
+                $restored = $this->dataHandler->restore(is_string($rawPayload) ? $rawPayload : '');
+                if (is_array($restored)) {
+                    /** @var array<string, mixed> $payload */
+                    $payload = $restored;
+                }
             } catch (\Throwable) {
-                // Decryption or unserialization failed - silent invalidation
-                $payload = [];
+                // Ignore restoration failures
             }
-            $flash = json_decode($data['flash_data'] ?? '[]', true);
+            
+            /** @var mixed $rawFlash */
+            $rawFlash = $data['flash_data'] ?? '[]';
+            $decoded = json_decode(is_string($rawFlash) ? $rawFlash : '[]', true);
+            if (is_array($decoded)) {
+                /** @var array<string, mixed> $flash */
+                $flash = $decoded;
+            }
 
-            // Populate metadata on read so it persists/updates correctly
-            $this->ipAddress = $data['ip_address'] ?? null;
-            $this->userAgent = $data['user_agent'] ?? null;
-            $this->userId = $data['user_id'] ?? null;
-        } else {
-            // New session
-            $payload = [];
-            $flash = [];
+            // Populate metadata
+            $this->ipAddress = (isset($data['ip_address']) && is_string($data['ip_address'])) ? $data['ip_address'] : null;
+            $this->userAgent = (isset($data['user_agent']) && is_string($data['user_agent'])) ? $data['user_agent'] : null;
+            
+            /** @var mixed $userId */
+            $userId = $data['user_id'] ?? null;
+            $this->userId = (is_string($userId) || is_int($userId)) ? $userId : null;
         }
 
         // 3. Initialize Bag
@@ -80,14 +97,12 @@ class SessionManager
 
     public function save(): void
     {
-        if (!$this->started || !$this->id) {
+        if (!$this->started || $this->id === null || $this->bag === null) {
             return;
         }
 
-        // Prepare Payload (Serialize/Encrypt)
         $payload = $this->dataHandler->prepare($this->bag->all());
 
-        // Prepare Metadata
         $metadata = [
             'flash_data' => json_encode($this->bag->getNewFlash()),
             'ip_address' => $this->ipAddress,
@@ -95,10 +110,7 @@ class SessionManager
             'user_id'    => $this->userId,
         ];
 
-        // Write
         $this->driver->write($this->id, $payload, $metadata);
-
-        // Unlock
         $this->driver->unlock($this->id);
 
         $this->started = false;
@@ -106,22 +118,18 @@ class SessionManager
 
     public function regenerate(bool $destroy = false): bool
     {
-        if (!$this->started) {
+        if (!$this->started || $this->id === null) {
             return false;
         }
 
         $oldId = $this->id;
-
-        // Generate new ID
         $this->id = $this->generateId();
 
-        // If destroy is true, we delete the old session data completely
         if ($destroy) {
             $this->driver->destroy($oldId);
         } else {
             $this->driver->unlock($oldId);
 
-            // Acquire lock for new ID immediately
             if (!$this->driver->lock($this->id)) {
                 throw SessionException::driverFailed('lock', 'Could not acquire lock for regenerated session');
             }
@@ -150,13 +158,15 @@ class SessionManager
         return bin2hex(random_bytes(16));
     }
 
-    // -- Proxy methods to Bag for easier usage --
-
     public function get(string $key, mixed $default = null): mixed
     {
         return $this->bag?->get($key, $default) ?? $default;
     }
 
+    /**
+     * @param string|array<string, mixed> $key
+     * @param mixed $value
+     */
     public function set(string|array $key, mixed $value = null): void
     {
         $this->bag?->put($key, $value);
@@ -186,8 +196,6 @@ class SessionManager
     {
         return $this->bag?->has($key) ?? false;
     }
-
-    // -- Metadata Setters --
 
     public function setIpAddress(?string $ipAddress): void
     {
@@ -219,22 +227,20 @@ class SessionManager
         return $this->userId;
     }
 
-    /**
-     * {@inheritdoc}
-     */
     public function token(): string
     {
-        return $this->get('_token');
+        $token = $this->get('_token', '');
+        return is_string($token) ? $token : '';
     }
 
-    /**
-     * {@inheritdoc}
-     */
     public function regenerateToken(): void
     {
         $this->set('_token', bin2hex(random_bytes(40)));
     }
 
+    /**
+     * @return array<string, mixed>
+     */
     public function all(): array
     {
         return $this->bag?->all() ?? [];
