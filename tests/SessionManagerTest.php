@@ -29,7 +29,6 @@ class SessionManagerTest extends TestCase
 
         $this->driver->expects($this->once())
             ->method('read')
-            // Any ID check
             ->willReturn(null); // New session
 
         $this->manager->start();
@@ -40,7 +39,8 @@ class SessionManagerTest extends TestCase
     public function testStartExistingSession(): void
     {
         $id = 'existing_sess';
-        $payload = serialize(['_attributes' => ['key' => 'val']]);
+        // v2 format: payload is just the attributes array
+        $payload = serialize(['key' => 'val']);
 
         $this->driver->expects($this->once())
             ->method('lock')
@@ -72,14 +72,16 @@ class SessionManagerTest extends TestCase
                 $this->anything(),
                 $this->callback(function ($p) {
                     $unserialized = unserialize($p);
-                    return isset($unserialized['_attributes']['foo']) && $unserialized['_attributes']['foo'] === 'bar';
+                    // v2 format: NO _attributes wrapper
+                    return isset($unserialized['foo']) && $unserialized['foo'] === 'bar';
                 }),
                 $this->anything()
             )
             ->willReturn(true);
 
         $this->driver->expects($this->once())
-            ->method('unlock');
+            ->method('unlock')
+            ->willReturn(true);
 
         $this->manager->save();
         $this->assertFalse($this->manager->isStarted());

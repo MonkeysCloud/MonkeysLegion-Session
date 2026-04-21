@@ -9,16 +9,19 @@ use MonkeysLegion\Session\Exceptions\SessionException;
 use MonkeysLegion\Session\Exceptions\SessionLockException;
 use Redis;
 
+/**
+ * Redis session driver.
+ */
 class RedisDriver implements SessionDriverInterface
 {
     private Redis $redis;
     private string $prefix;
     private int $ttl;
+    
+    /** @var array<string, string> */
     private array $locks = [];
 
     /**
-     * Create a new Redis driver instance.
-     *
      * @param Redis $redis The Redis connection instance
      * @param string $prefix Key prefix for session data (default: 'session:')
      * @param int $ttl Session time-to-live in seconds (default: 7200)
@@ -33,11 +36,11 @@ class RedisDriver implements SessionDriverInterface
     public function __destruct()
     {
         try {
-            if (isset($this->redis) && !empty($this->locks)) {
+            if (!empty($this->locks)) {
                 $this->close();
             }
-        } catch (\Throwable $e) {
-            // Silence errors in destructor to prevent "Fatal error during shutdown"
+        } catch (\Throwable) {
+            // Silence errors in destructor
         }
     }
 
@@ -46,11 +49,10 @@ class RedisDriver implements SessionDriverInterface
      */
     public function open(string $path, string $name): bool
     {
-        // Redis doesn't need initialization like files or database connections
-        // We just verify the connection is alive
         try {
-            $this->redis->ping();
-            return true;
+            /** @var mixed $ping */
+            $ping = $this->redis->ping();
+            return (bool)$ping;
         } catch (\RedisException $e) {
             throw SessionException::driverFailed('open', $e->getMessage());
         }
@@ -61,9 +63,8 @@ class RedisDriver implements SessionDriverInterface
      */
     public function close(): bool
     {
-        // Release any remaining locks before closing
         foreach (array_keys($this->locks) as $id) {
-            $this->unlock($id);
+            $this->unlock((string)$id);
         }
 
         return true;
@@ -77,20 +78,17 @@ class RedisDriver implements SessionDriverInterface
         try {
             $key = $this->getKey($id);
 
-            // Use HGETALL to get all session fields
+            /** @var array<string, mixed>|false $session */
             $session = $this->redis->hGetAll($key);
 
-            // If session doesn't exist, return null
-            if (empty($session)) {
+            if ($session === false || empty($session)) {
                 return null;
             }
 
-            // Refresh the TTL on read to keep active sessions alive
             $this->redis->expire($key, $this->ttl);
 
             return $session;
-        } catch (\RedisException $e) {
-             // In production might want to log this
+        } catch (\RedisException) {
              return null;
         }
     }
@@ -108,15 +106,14 @@ class RedisDriver implements SessionDriverInterface
                 'last_activity' => time(),
             ];
             
-            // Merge metadata
             $data = array_merge($data, $metadata);
 
+            /** @var bool|Redis $result */
             $result = $this->redis->hMSet($key, $data);
             
-            // Set expiration time
             $this->redis->expire($key, $this->ttl);
 
-            return $result;
+            return $result !== false;
         } catch (\RedisException $e) {
             throw SessionException::driverFailed('write', $e->getMessage());
         }
@@ -131,13 +128,12 @@ class RedisDriver implements SessionDriverInterface
             $key = $this->getKey($id);
             $lockKey = $this->getLockKey($id);
 
-            // Delete both session data and lock (if exists)
-            $this->redis->del([$key, $lockKey]);
+            /** @var mixed $delResult */
+            $delResult = $this->redis->del([$key, $lockKey]);
 
-            // Remove from local lock tracking
             unset($this->locks[$id]);
 
-            return true;
+            return $delResult !== false;
         } catch (\RedisException $e) {
             throw SessionException::driverFailed('destroy', $e->getMessage());
         }
@@ -148,9 +144,6 @@ class RedisDriver implements SessionDriverInterface
      */
     public function gc(int $maxLifetime): int|false
     {
-        // Redis handles expiration automatically via TTL
-        // We don't need manual garbage collection
-        // Return 0 to indicate no manual cleanup was needed
         return 0;
     }
 
@@ -159,7 +152,6 @@ class RedisDriver implements SessionDriverInterface
      */
     public function lock(string $id, int $timeout = 30): bool
     {
-        // If already locked by this instance, don't re-lock
         if (isset($this->locks[$id])) {
             throw SessionLockException::alreadyLocked($id);
         }
@@ -169,24 +161,21 @@ class RedisDriver implements SessionDriverInterface
         $deadline = microtime(true) + $timeout;
 
         try {
-            // Try to acquire lock with exponential backoff
-            $waitTime = 10000; // Start with 10ms
+            $waitTime = 10000; // 10ms
 
             while (microtime(true) < $deadline) {
-                // SET NX EX: Set if Not eXists with EXpiration
-                // This is atomic and prevents race conditions
+                /** @var bool|Redis $acquired */
                 $acquired = $this->redis->set(
                     $lockKey,
                     $lockValue,
-                    ['nx', 'ex' => $timeout + 5] // Lock expires slightly after timeout
+                    ['nx', 'ex' => $timeout + 5]
                 );
 
-                if ($acquired) {
+                if ($acquired !== false) {
                     $this->locks[$id] = $lockValue;
                     return true;
                 }
 
-                // Exponential backoff: wait before retrying
                 usleep($waitTime);
                 $waitTime = min($waitTime * 2, 100000); // Max 100ms
             }
@@ -202,7 +191,6 @@ class RedisDriver implements SessionDriverInterface
      */
     public function unlock(string $id): bool
     {
-        // Check if we actually hold this lock locally
         if (!isset($this->locks[$id])) {
             return true;
         }
@@ -219,69 +207,56 @@ class RedisDriver implements SessionDriverInterface
             end
         LUA;
 
-            // Use the Lua script to ensure atomicity
+            /** @var mixed $result */
             $result = $this->redis->eval($script, [$lockKey, $lockValue], 1);
 
-            // CRITICAL: Always remove from local array if we attempted release
             unset($this->locks[$id]);
 
             return (int)$result > 0;
-        } catch (\RedisException $e) {
+        } catch (\RedisException) {
             return false;
         }
     }
 
-    /**
-     * Get the full Redis key for a session ID.
-     * Uses hash to store session metadata like DatabaseDriver.
-     *
-     * @param string $id
-     * @return string
-     */
     private function getKey(string $id): string
     {
         return $this->prefix . $id;
     }
 
-    /**
-     * Get the Redis key for a session lock.
-     *
-     * @param string $id
-     * @return string
-     */
     private function getLockKey(string $id): string
     {
         return $this->prefix . 'lock:' . $id;
     }
 
-    /**
-     * Generate a unique lock value to identify this lock owner.
-     *
-     * @return string
-     */
     private function generateLockValue(): string
     {
-        return uniqid(getmypid() . '_', true);
+        return uniqid((string)getmypid() . '_', true);
     }
-
+    
     /**
-     * Set the TTL for sessions.
+     * Create a new session entry.
      *
-     * @param int $ttl Time-to-live in seconds
-     * @return void
+     * @param string $id
+     * @return bool
      */
-    public function setTtl(int $ttl): void
+    public function create(string $id): bool
     {
-        $this->ttl = $ttl;
-    }
+        try {
+            $key = $this->getKey($id);
+            
+            $data = [
+                'payload' => '',
+                'last_activity' => time(),
+                'created_at' => time(),
+            ];
 
-    /**
-     * Get the current TTL setting.
-     *
-     * @return int
-     */
-    public function getTtl(): int
-    {
-        return $this->ttl;
+            /** @var bool|Redis $result */
+            $result = $this->redis->hMSet($key, $data);
+            $this->redis->expire($key, $this->ttl);
+
+            return $result !== false;
+        } catch (\RedisException) {
+            return false;
+        }
     }
 }

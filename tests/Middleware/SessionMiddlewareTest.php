@@ -14,67 +14,62 @@ use Psr\Http\Server\RequestHandlerInterface;
 
 class SessionMiddlewareTest extends TestCase
 {
-    /** @var SessionDriverInterface&MockObject */
-    private $driver;
-    private SessionManager $manager;
-    /** @var ServerRequestInterface&MockObject */
-    private $request;
-    /** @var RequestHandlerInterface&MockObject */
-    private $handler;
-    /** @var ResponseInterface&MockObject */
-    private $response;
-
-    private SessionMiddleware $middleware;
-
-    protected function setUp(): void
-    {
-        $this->driver = $this->createMock(\MonkeysLegion\Session\Contracts\SessionDriverInterface::class);
-        $this->manager = new SessionManager($this->driver);
-        $this->request = $this->createMock(ServerRequestInterface::class);
-        $this->handler = $this->createMock(RequestHandlerInterface::class);
-        $this->response = $this->createMock(ResponseInterface::class);
-
-        $this->middleware = new SessionMiddleware($this->manager);
-    }
-
     public function testProcessStartsAndSavesSession(): void
     {
+        /** @var SessionManager&MockObject $manager */
+        $manager = $this->createMock(SessionManager::class);
+        /** @var ServerRequestInterface&MockObject $request */
+        $request = $this->createMock(ServerRequestInterface::class);
+        /** @var RequestHandlerInterface&MockObject $handler */
+        $handler = $this->createMock(RequestHandlerInterface::class);
+        /** @var ResponseInterface&MockObject $response */
+        $response = $this->createMock(ResponseInterface::class);
+
+        $middleware = new SessionMiddleware($manager);
+
         // 1. Cookie Extraction
-        $this->request->expects($this->once())
+        $request->method('withAttribute')->willReturnSelf();
+        $request->expects($this->once())
             ->method('getCookieParams')
             ->willReturn(['ml_session' => 'sess_123']);
 
-        // Verify laziness: driver->read is never called because session is never accessed
-        $this->driver->expects($this->never())
-            ->method('read');
+        // 2. Start Session
+        $manager->expects($this->once())
+            ->method('start')
+            ->with('sess_123');
 
-        // 2. Populate Metadata (Request Params)
-        $this->request->method('getServerParams')->willReturn(['REMOTE_ADDR' => '127.0.0.1']);
+        // 3. Populate Metadata (Request Params)
+        // Use atLeastOnce() to avoid any() deprecation and provide expectations
+        $request->expects($this->atLeastOnce())->method('getServerParams')->willReturn(['REMOTE_ADDR' => '127.0.0.1']);
 
-        $this->request->method('getHeaderLine')->willReturnMap([
+        $request->expects($this->atLeastOnce())->method('getHeaderLine')->willReturnMap([
             ['X-Forwarded-For', ''],
             ['User-Agent', 'TestAgent']
         ]);
 
-        $this->request->method('hasHeader')->willReturnMap([
-            ['X-Forwarded-For', false],
-            ['User-Agent', true]
-        ]);
+        $request->expects($this->atLeastOnce())->method('hasHeader')->with('User-Agent')->willReturn(true);
 
-        $this->request->method('withAttribute')->willReturnSelf();
+        $manager->expects($this->once())->method('setIpAddress')->with('127.0.0.1');
+        $manager->expects($this->once())->method('setUserAgent')->with('TestAgent');
 
-        // 3. Handle Request
-        $this->handler->expects($this->once())
+        // 4. Handle Request
+        $handler->expects($this->once())
             ->method('handle')
-            ->with($this->request)
-            ->willReturn($this->response);
+            ->with($request)
+            ->willReturn($response);
 
-        // Let middleware set the ID from cookie (don't pre-seed)
-        $this->response->expects($this->once())
+        // 5. Save Session
+        $manager->expects($this->once())->method('save');
+
+        // 6. Cookie Setting
+        $manager->expects($this->atLeastOnce())->method('isStarted')->willReturn(true);
+        $manager->expects($this->atLeastOnce())->method('getId')->willReturn('sess_123');
+
+        $response->expects($this->once())
             ->method('withAddedHeader')
             ->with('Set-Cookie', $this->stringContains('ml_session=sess_123'))
-            ->willReturn($this->response);
+            ->willReturn($response);
 
-        $this->middleware->process($this->request, $this->handler);
+        $middleware->process($request, $handler);
     }
 }

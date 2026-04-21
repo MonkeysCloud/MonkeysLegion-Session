@@ -35,13 +35,8 @@ class SessionMiddleware implements MiddlewareInterface
         $cookies = $request->getCookieParams();
         $id = $cookies[$this->config['cookie_name']] ?? null;
 
-        // 2. Set Context on Lazy Manager
-        if ($id) {
-            $this->manager->id = $id;
-        } else {
-            // Reset ID to prevent session bleed in long-lived workers (RoadRunner/Swoole)
-            $this->manager->id = '';
-        }
+        // 2. Set Context and Start
+        $this->manager->start($id ?? '');
 
         $this->populateMetadata($request);
 
@@ -57,8 +52,8 @@ class SessionMiddleware implements MiddlewareInterface
         }
 
         // 6. Add Cookie to Response
-        if ($this->manager->isStarted || $this->manager->id !== '') {
-            $response = $this->addCookieToResponse($response, $this->manager->id);
+        if ($this->manager->isStarted() || $this->manager->getId() !== '') {
+            $response = $this->addCookieToResponse($response, $this->manager->getId());
         }
 
         return $response;
@@ -75,7 +70,8 @@ class SessionMiddleware implements MiddlewareInterface
 
         $ua = $request->hasHeader('User-Agent') ? $request->getHeaderLine('User-Agent') : null;
 
-        $this->manager->setRequestInfo($ip, $ua);
+        $this->manager->setIpAddress($ip);
+        $this->manager->setUserAgent($ua);
     }
 
     private function addCookieToResponse(ResponseInterface $response, string $sessionId): ResponseInterface

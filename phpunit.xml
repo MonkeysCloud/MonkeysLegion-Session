@@ -2,14 +2,19 @@
 <phpunit
     bootstrap="vendor/autoload.php"
     colors="true"
-    verbose="true"
     failOnRisky="true"
     failOnWarning="true"
     stopOnFailure="false"
+    cacheDirectory=".phpunit.cache"
 >
     <testsuites>
         <testsuite name="MonkeysLegion Session">
             <directory>./tests</directory>
         </testsuite>
     </testsuites>
+    <source>
+        <include>
+            <directory suffix=".php">src</directory>
+        </include>
+    </source>
 </phpunit>

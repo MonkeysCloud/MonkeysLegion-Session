@@ -5,22 +5,32 @@ declare(strict_types=1);
 namespace MonkeysLegion\Session\Drivers;
 
 use MonkeysLegion\Database\Contracts\ConnectionManagerInterface;
+use MonkeysLegion\Database\Types\DatabaseDriver as DriverType;
 use MonkeysLegion\Query\Query\QueryBuilder;
 use MonkeysLegion\Session\Contracts\SessionDriverInterface;
 
+/**
+ * Database session driver.
+ */
 class DatabaseDriver implements SessionDriverInterface
 {
     private QueryBuilder $queryBuilder;
     private string $table;
 
-    private const LOCK_KEY = 'ml_session_';
+    private const string LOCK_KEY = 'ml_session_';
 
+    /**
+     * @param ConnectionManagerInterface $connectionManager
+     * @param array<string, mixed> $config
+     */
     public function __construct(
-        private ConnectionManagerInterface $connectionManager,
-        private array $config
+        private readonly ConnectionManagerInterface $connectionManager,
+        private readonly array $config
     ) {
         $this->queryBuilder = new QueryBuilder($this->connectionManager);
-        $this->table = $config['table'] ?? 'sessions';
+        /** @var mixed $table */
+        $table = $config['table'] ?? 'sessions';
+        $this->table = is_string($table) ? $table : 'sessions';
     }
 
     /**
@@ -28,7 +38,6 @@ class DatabaseDriver implements SessionDriverInterface
      */
     public function open(string $path, string $name): bool
     {
-        // No initialization needed for database connection
         return true;
     }
 
@@ -37,31 +46,27 @@ class DatabaseDriver implements SessionDriverInterface
      */
     public function close(): bool
     {
-        // No cleanup needed for database connection
         return true;
     }
 
     /**
      * {@inheritdoc}
      */
-    /**
-     * {@inheritdoc}
-     */
-    // In DatabaseDriver.php
-
     public function read(string $id): ?array
     {
+        /** @var array<string, mixed>|null $session */
         $session = $this->queryBuilder
-            ->reset()
             ->from($this->table)
             ->where('session_id', '=', $id)
             ->first();
 
-        if (!$session) {
+        if ($session === null) {
             return null;
         }
 
-        if (isset($session['expiration']) && time() > (int)$session['expiration']) {
+        /** @var mixed $expiration */
+        $expiration = $session['expiration'] ?? null;
+        if ($expiration !== null && is_numeric($expiration) && time() > (int)$expiration) {
             $this->destroy($id);
             return null;
         }
@@ -74,7 +79,9 @@ class DatabaseDriver implements SessionDriverInterface
      */
     public function write(string $id, string $payload, array $metadata): bool
     {
-        $lifetime = $this->config['lifetime'] ?? 7200;
+        /** @var mixed $lifetimeVal */
+        $lifetimeVal = $this->config['lifetime'] ?? 7200;
+        $lifetime = is_numeric($lifetimeVal) ? (int)$lifetimeVal : 7200;
         $now = time();
 
         $data = [
@@ -91,15 +98,13 @@ class DatabaseDriver implements SessionDriverInterface
         }
 
         $exists = $this->queryBuilder
-            ->reset()
             ->from($this->table)
             ->where('session_id', '=', $id)
             ->count() > 0;
 
         if ($exists) {
             return $this->queryBuilder
-                ->reset()
-                ->from($this->table)
+                ->table($this->table)
                 ->where('session_id', '=', $id)
                 ->update($data) > 0;
         }
@@ -107,8 +112,10 @@ class DatabaseDriver implements SessionDriverInterface
         $data['session_id'] = $id;
         $data['created_at'] = $now;
 
-        $this->queryBuilder->reset()->from($this->table)->insert($data);
-        return true;
+        /** @var array<string, mixed> $data */
+        return (bool)$this->queryBuilder
+            ->table($this->table)
+            ->insert($data);
     }
 
     /**
@@ -117,8 +124,7 @@ class DatabaseDriver implements SessionDriverInterface
     public function destroy(string $id): bool
     {
         return $this->queryBuilder
-            ->reset()
-            ->from($this->table)
+            ->table($this->table)
             ->where('session_id', '=', $id)
             ->delete() > 0;
     }
@@ -130,8 +136,8 @@ class DatabaseDriver implements SessionDriverInterface
     {
         $threshold = time() - $maxLifetime;
 
-        $count = (new QueryBuilder($this->connectionManager))
-            ->from($this->table)
+        $count = (int)$this->queryBuilder
+            ->table($this->table)
             ->where('last_activity', '<', $threshold)
             ->count();
 
@@ -139,8 +145,8 @@ class DatabaseDriver implements SessionDriverInterface
             return 0;
         }
 
-        $deleted = (new QueryBuilder($this->connectionManager))
-            ->from($this->table)
+        $deleted = $this->queryBuilder
+            ->table($this->table)
             ->where('last_activity', '<', $threshold)
             ->delete();
 
@@ -152,14 +158,26 @@ class DatabaseDriver implements SessionDriverInterface
      */
     public function lock(string $id, int $timeout = 30): bool
     {
-        // We use a prefix to avoid collisions with other app locks
         $lockName = self::LOCK_KEY . $id;
+        $conn = $this->connectionManager->connection();
+        $driver = $conn->getDriver();
 
-        // GET_LOCK returns 1 if successful, 0 if it timed out, NULL on error
-        $stmt = $this->connectionManager->connection()->query("SELECT GET_LOCK(?, ?)", [$lockName, $timeout]);
-        $result = $stmt->fetchColumn();
+        $sql = match ($driver) {
+            DriverType::MySQL => 'SELECT GET_LOCK(:name, :timeout)',
+            DriverType::PostgreSQL => 'SELECT pg_try_advisory_lock(hashtext(:name))',
+            default => 'SELECT 1 as lock_status',
+        };
 
-        return (int)$result === 1;
+        $params = match ($driver) {
+            DriverType::MySQL => [':name' => $lockName, ':timeout' => $timeout],
+            DriverType::PostgreSQL => [':name' => $lockName],
+            default => [],
+        };
+
+        /** @var mixed $result */
+        $result = $conn->query($sql, $params)->fetchColumn();
+
+        return (bool)$result;
     }
 
     /**
@@ -168,11 +186,24 @@ class DatabaseDriver implements SessionDriverInterface
     public function unlock(string $id): bool
     {
         $lockName = self::LOCK_KEY . $id;
+        $conn = $this->connectionManager->connection();
+        $driver = $conn->getDriver();
 
-        // RELEASE_LOCK returns 1 if released, 0 if lock wasn't yours, NULL if no lock
-        $stmt = $this->connectionManager->connection()->query("SELECT RELEASE_LOCK(?)", [$lockName]);
-        $result = $stmt->fetchColumn();
+        $sql = match ($driver) {
+            DriverType::MySQL => 'SELECT RELEASE_LOCK(:name)',
+            DriverType::PostgreSQL => 'SELECT pg_advisory_unlock(hashtext(:name))',
+            default => 'SELECT 1 as lock_status',
+        };
 
-        return (int)$result === 1;
+        $params = match ($driver) {
+            DriverType::MySQL, DriverType::PostgreSQL => [':name' => $lockName],
+            default => [],
+        };
+
+        /** @var mixed $result */
+        $result = $conn->query($sql, $params)->fetchColumn();
+
+        return (bool)$result;
     }
 }
+

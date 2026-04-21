@@ -19,7 +19,7 @@ class DriverFactory
      * Create a new session driver instance.
      *
      * @param string $driver The driver name ('file', 'database', 'redis')
-     * @param array $config Configuration array for the driver
+     * @param array<string, mixed> $config Configuration array for the driver
      * @return SessionDriverInterface
      * @throws InvalidArgumentException If the driver is not supported
      * @throws RuntimeException If required dependencies are missing in config
@@ -34,17 +34,27 @@ class DriverFactory
         };
     }
 
+    /**
+     * @param array<string, mixed> $config
+     */
     protected function createFileDriver(array $config): FileDriver
     {
         if (!isset($config['path'])) {
             throw new RuntimeException("File driver requires 'path' configuration.");
         }
 
-        $ttl = $config['lifetime'] ?? 7200;
+        /** @var mixed $path */
+        $path = $config['path'];
+        /** @var mixed $ttlVal */
+        $ttlVal = $config['lifetime'] ?? 7200;
+        $ttl = is_numeric($ttlVal) ? (int)$ttlVal : 7200;
 
-        return new FileDriver($config['path'], (int)$ttl);
+        return new FileDriver(is_string($path) ? $path : '', $ttl);
     }
 
+    /**
+     * @param array<string, mixed> $config
+     */
     protected function createDatabaseDriver(array $config): DatabaseDriver
     {
         if (!isset($config['connection']) || !($config['connection'] instanceof ConnectionManagerInterface)) {
@@ -54,15 +64,23 @@ class DriverFactory
         return new DatabaseDriver($config['connection'], $config);
     }
 
+    /**
+     * @param array<string, mixed> $config
+     */
     protected function createRedisDriver(array $config): RedisDriver
     {
         if (!isset($config['redis']) || !($config['redis'] instanceof Redis)) {
             throw new RuntimeException("Redis driver requires 'redis' (Redis) instance in configuration.");
         }
 
-        $prefix = $config['prefix'] ?? 'session:';
-        $ttl = $config['lifetime'] ?? 7200;
+        /** @var mixed $prefixVal */
+        $prefixVal = $config['prefix'] ?? 'session:';
+        $prefix = is_string($prefixVal) ? $prefixVal : 'session:';
+        
+        /** @var mixed $ttlVal */
+        $ttlVal = $config['lifetime'] ?? 7200;
+        $ttl = is_numeric($ttlVal) ? (int)$ttlVal : 7200;
 
-        return new RedisDriver($config['redis'], $prefix, (int)$ttl);
+        return new RedisDriver($config['redis'], $prefix, $ttl);
     }
 }

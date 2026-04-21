@@ -54,7 +54,7 @@ interface SessionInterface
     /**
      * Remove a key from the session.
      */
-    public function remove(string $key): void;
+    public function forget(string $key): void;
 
     /**
      * Get a value and immediately delete it.
@@ -65,6 +65,11 @@ interface SessionInterface
      * Store flash data for the next request only.
      */
     public function flash(string $key, mixed $value): void;
+
+    /**
+     * Retrieve flash data.
+     */
+    public function getFlash(string $key, mixed $default = null): mixed;
 
     /**
      * Reflash all flash data for another request.
@@ -80,6 +85,21 @@ interface SessionInterface
      * Store flash data that will be available immediately and expire at end of request.
      */
     public function now(string $key, mixed $value): void;
+
+    /**
+     * Set the user's IP address for validation.
+     */
+    public function setIpAddress(?string $ip): void;
+
+    /**
+     * Set the user's browser string for validation.
+     */
+    public function setUserAgent(?string $ua): void;
+
+    /**
+     * Associate a User ID with the session.
+     */
+    public function setUserId(string|int|null $id): void;
 
     /**
      * Get all session data from the attribute bag.

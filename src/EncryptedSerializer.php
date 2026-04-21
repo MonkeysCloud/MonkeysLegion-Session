@@ -8,17 +8,20 @@ use MonkeysLegion\Session\Contracts\DataHandlerInterface;
 use MonkeysLegion\Session\Exceptions\SessionException;
 use RuntimeException;
 
+/**
+ * Encrypted serializer wrapper.
+ */
 class EncryptedSerializer implements DataHandlerInterface
 {
-    private const CIPHER = 'aes-256-gcm';
+    private const string CIPHER = 'aes-256-gcm';
 
     /**
      * @param DataHandlerInterface $serializer The underlying serializer (e.g., NativeSerializer)
-     * @param array $keys The key ring (ID => Key)
+     * @param array<string, string> $keys The key ring (ID => Key)
      */
     public function __construct(
-        private DataHandlerInterface $serializer,
-        private array $keys
+        private readonly DataHandlerInterface $serializer,
+        private readonly array $keys
     ) {
         if (empty($this->keys)) {
             throw new RuntimeException('Encryption requires at least one key in the key ring.');
@@ -32,11 +35,12 @@ class EncryptedSerializer implements DataHandlerInterface
     {
         $serialized = $this->serializer->prepare($data);
         
-        $iv = random_bytes(openssl_cipher_iv_length(self::CIPHER));
+        $ivLength = (int)openssl_cipher_iv_length(self::CIPHER);
+        $iv = random_bytes($ivLength);
         $tag = '';
         
         // Get the current (first) key and its ID
-        $keyId = array_key_first($this->keys);
+        $keyId = (string)array_key_first($this->keys);
         $key = $this->keys[$keyId];
 
         $ciphertext = openssl_encrypt(
@@ -52,7 +56,7 @@ class EncryptedSerializer implements DataHandlerInterface
             throw SessionException::driverFailed('encrypt', 'Encryption failed');
         }
 
-        return json_encode([
+        return (string)json_encode([
             'iv' => base64_encode($iv),
             'value' => base64_encode($ciphertext),
             'tag' => base64_encode($tag),
@@ -65,12 +69,10 @@ class EncryptedSerializer implements DataHandlerInterface
      */
     public function restore(string $data): mixed
     {
+        /** @var array<string, string>|null $payload */
         $payload = json_decode($data, true);
 
-        if (!$payload || !isset($payload['iv'], $payload['value'], $payload['tag'])) {
-            // Not a valid encrypted payload, try treating it as raw serialized data (for migration)
-            // or just let it fail at the outer level. 
-            // Based on discussion, we should throw a specific exception that the Manager catches.
+        if ($payload === null || !isset($payload['iv'], $payload['value'], $payload['tag'])) {
             throw new RuntimeException('Invalid encrypted payload structure.');
         }
 
@@ -80,11 +82,11 @@ class EncryptedSerializer implements DataHandlerInterface
         $keyId = $payload['key_id'] ?? null;
 
         $key = null;
-        if ($keyId && isset($this->keys[$keyId])) {
+        if ($keyId !== null && isset($this->keys[$keyId])) {
             $key = $this->keys[$keyId];
         }
 
-        if ($key) {
+        if ($key !== null) {
             $decrypted = openssl_decrypt(
                 $ciphertext,
                 self::CIPHER,
@@ -100,8 +102,10 @@ class EncryptedSerializer implements DataHandlerInterface
         }
 
         // If Key ID was wrong or decryption failed, try all keys in the ring (legacy/fallback)
-        foreach ($this->keys as $candidateKey) {
-            if ($candidateKey === $key) continue;
+        foreach ($this->keys as $candidateKeyId => $candidateKey) {
+            if ($keyId !== null && (string)$candidateKeyId === (string)$keyId) {
+                continue;
+            }
 
             $decrypted = openssl_decrypt(
                 $ciphertext,

@@ -11,38 +11,24 @@ use Psr\Http\Server\MiddlewareInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use RuntimeException;
 
+/**
+ * Middleware to verify CSRF tokens.
+ */
 class VerifyCsrfToken implements MiddlewareInterface
 {
     /**
-     * The session manager instance.
-     *
-     * @var SessionManager
-     */
-    protected SessionManager $manager;
-
-    /**
      * Create a new middleware instance.
-     *
-     * @param SessionManager $manager
      */
-    public function __construct(SessionManager $manager)
+    public function __construct(protected readonly SessionManager $manager)
     {
-        $this->manager = $manager;
     }
 
     /**
      * Process an incoming server request.
-     *
-     * @param ServerRequestInterface $request
-     * @param RequestHandlerInterface $handler
-     * @return ResponseInterface
      */
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
-        if (
-            $this->isReading($request) ||
-            $this->tokensMatch($request)
-        ) {
+        if ($this->isReading($request) || $this->tokensMatch($request)) {
             return $handler->handle($request);
         }
 
@@ -51,50 +37,44 @@ class VerifyCsrfToken implements MiddlewareInterface
 
     /**
      * Determine if the HTTP request uses a read-only method.
-     *
-     * @param ServerRequestInterface $request
-     * @return bool
      */
     protected function isReading(ServerRequestInterface $request): bool
     {
-        return in_array($request->getMethod(), ['GET', 'HEAD', 'OPTIONS']);
+        return in_array($request->getMethod(), ['GET', 'HEAD', 'OPTIONS'], true);
     }
 
     /**
      * Determine if the session and input CSRF tokens match.
-     *
-     * @param ServerRequestInterface $request
-     * @return bool
      */
     protected function tokensMatch(ServerRequestInterface $request): bool
     {
         $token = $this->getTokenFromRequest($request);
+        $sessionToken = $this->manager->token();
 
         return is_string($token) &&
-               is_string($this->manager->token()) &&
-               hash_equals($this->manager->token(), $token);
+               $sessionToken !== '' &&
+               hash_equals($sessionToken, $token);
     }
 
     /**
      * Get the CSRF token from the request.
-     *
-     * @param ServerRequestInterface $request
-     * @return string|null
      */
     protected function getTokenFromRequest(ServerRequestInterface $request): ?string
     {
+        /** @var mixed $parsedBody */
         $parsedBody = $request->getParsedBody();
         
+        /** @var mixed $token */
         $token = is_array($parsedBody) ? ($parsedBody['_token'] ?? null) : null;
 
-        if (!$token) {
+        if (!is_string($token)) {
             $token = $request->getHeaderLine('X-CSRF-TOKEN');
         }
 
-        if (!$token) {
+        if ($token === '') {
             $token = $request->getHeaderLine('X-XSRF-TOKEN');
         }
 
-        return $token;
+        return is_string($token) && $token !== '' ? $token : null;
     }
 }

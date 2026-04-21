@@ -6,6 +6,9 @@ namespace MonkeysLegion\Session;
 
 use MonkeysLegion\Session\Contracts\DataHandlerInterface;
 
+/**
+ * Standard PHP serialization.
+ */
 class NativeSerializer implements DataHandlerInterface
 {
     /**
@@ -21,6 +24,13 @@ class NativeSerializer implements DataHandlerInterface
      */
     public function restore(string $data): mixed
     {
-        return unserialize($data);
+        if ($data === '') {
+            return [];
+        }
+
+        /** @var mixed $result */
+        $result = @unserialize($data);
+        
+        return $result === false ? [] : $result;
     }
 }
