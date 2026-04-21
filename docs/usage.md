@@ -139,10 +139,13 @@ use MonkeysLegion\Session\Middleware\VerifyCsrfToken;
 $csrfMiddleware = new VerifyCsrfToken($sessionManager);
 ```
 
-The middleware looks for the token in:
-1. The `_token` field in the request body.
-2. The `X-CSRF-TOKEN` HTTP header.
-3. The `X-XSRF-TOKEN` HTTP header.
+The middleware protects your application by performing the following checks:
+1.  **Method Check:** It completely ignores read-only HTTP methods (`GET`, `HEAD`, `OPTIONS`).
+2.  **Token Extraction:** For state-changing methods (`POST`, `PUT`, `PATCH`, `DELETE`), it attempts to find the provided token in:
+    *   The `_csrf` field in the request body (e.g., standard HTML forms).
+    *   The `X-CSRF-TOKEN` HTTP header (common for standard AJAX requests).
+    *   The `X-XSRF-TOKEN` HTTP header (common for Axios/Angular setups).
+3.  **Verification:** It compares the provided token against the one stored securely in the user's `SessionManager` using a constant-time string comparison (`hash_equals`) to prevent timing attacks. If they do not match, a `RuntimeException` is thrown.
 
 ---
 

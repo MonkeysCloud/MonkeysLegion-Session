@@ -65,7 +65,7 @@ class VerifyCsrfToken implements MiddlewareInterface
         $parsedBody = $request->getParsedBody();
         
         /** @var mixed $token */
-        $token = is_array($parsedBody) ? ($parsedBody['_token'] ?? null) : null;
+        $token = is_array($parsedBody) ? ($parsedBody['_csrf'] ?? null) : null;
 
         if (!is_string($token)) {
             $token = $request->getHeaderLine('X-CSRF-TOKEN');

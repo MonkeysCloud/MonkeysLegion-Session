@@ -200,13 +200,13 @@ The Middleware bridges the HTTP Request/Response with the Session Manager. It en
 
 | Phase           | Action              | Detail                                                                             |
 | :-------------- | :------------------ | :--------------------------------------------------------------------------------- |
-| **1. Extract**  | `getCookie()`       | Look for the session cookie (e.g., `ML_SESS`) in the Request.                      |
-| **2. Start**    | `manager->start()`  | The Manager triggers `driver->lock()` and `driver->read()`.                        |
+| **1. Extract**  | `getCookieParams()` | Checks the HTTP cookies for the configured session name (e.g., `ml_session`). It also captures the IP (`REMOTE_ADDR` or `X-Forwarded-For`) and the `User-Agent`. |
+| **2. Start**    | `manager->start()`  | The Manager triggers `driver->lock()` and `driver->read()`. It associates the extracted IP and User-Agent with the Session payload for security tracking. |
 | **3. Inject**   | `withAttribute()`   | The Session object is attached to the Request for use in Controllers.              |
 | **4. Process**  | `handler->handle()` | The actual application logic runs (Routes, Controllers, Actions).                  |
 | **5. Capture**  | `getResponse()`     | The Middleware catches the resulting Response object.                              |
 | **6. Commit**   | `manager->save()`   | The Manager triggers `driver->write()` and `driver->unlock()`.                     |
-| **7. Finalize** | `set-cookie`        | If the session is new or regenerated, add the `Set-Cookie` header to the Response. |
+| **7. Finalize** | `withAddedHeader()` | If the session is new or regenerated, add the `Set-Cookie` header to the Response. |
 
 ### Logic Flow Diagram (Conceptual)
 
