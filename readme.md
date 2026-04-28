@@ -1,63 +1,444 @@
-# MonkeysLegion Session
+# MonkeysLegion Session v2
 
-## 1. Session Composition (The Core)
+Secure, driver-based HTTP session management for the MonkeysLegion framework. Ground-up rebuild for PHP 8.4 with property hooks, typed Bag architecture, and zero hard dependencies beyond PSR-7/15.
 
-A session instance in MonkeysLegion will consist of the following data points:
+## Features
 
-| Component         | Description                                            | Example / Value                    |
-| :---------------- | :----------------------------------------------------- | :--------------------------------- |
-| **Session ID**    | Unique, cryptographically secure identifier.           | `ml_sess_8f2d9c1a...`              |
-| **Payload**       | Persistent data stored for the user.                   | `{"user_id": 42, "role": "admin"}` |
-| **Flash Data**    | Temporary data that is deleted after the next request. | `{"status": "Profile updated!"}`   |
-| **Created At**    | Timestamp of when the session was first generated.     | `1707782400` (Unix)                |
-| **Last Activity** | Timestamp updated on every request (for idle timeout). | `1707782900` (Unix)                |
-| **Expiration**    | Hard cutoff time when the session becomes invalid.     | `1707786000` (Unix)                |
+| Feature                         | Status                                                                                    |
+| ------------------------------- | ----------------------------------------------------------------------------------------- |
+| **Multi-Driver Storage**        | File, Database (via `ConnectionManagerInterface`), Redis — switchable via `DriverFactory` |
+| **Bag Architecture**            | `AttributeBag`, `FlashBag`, `MetadataBag` — each implements `SessionBagInterface`         |
+| **Atomic Locking**              | Per-session `lock()` / `unlock()` on every driver to prevent race conditions              |
+| **AES-256-GCM Encryption**      | Optional payload encryption with key-ring rotation support                                |
+| **CSRF Protection**             | Auto-generated tokens + `VerifyCsrfToken` PSR-15 middleware                               |
+| **Flash Data**                  | One-hop flash messages with `reflash()`, `keep()`, and `now()`                            |
+| **Session Fixation Prevention** | `regenerate()` and `invalidate()` for safe login flows                                    |
+| **Dot Notation Access**         | Nested `get()` / `set()` via `user.profile.name` style keys                               |
+| **Service Provider**            | `SessionServiceProvider` for PSR-11 DI registration                                       |
+| **PHP 8.4 Native**              | Property hooks (`$id`, `$isStarted`, `$name`), `readonly` constructors, typed constants   |
 
----
+## Requirements
 
-## 2. Security Fingerprinting (Validation)
+- **PHP 8.4** or higher
+- `psr/http-message` ^2.0
+- `psr/http-server-middleware` ^1.0
+- `psr/http-server-handler` ^1.0
 
-To prevent session hijacking, we store and verify these browser/network traits:
-
-- **User-Agent (UA):** The browser string. If it changes mid-session, we immediately **kill** the session (High-risk indicator).
-- **IP Address:** The user's network address.
-  - _Strict Mode:_ Invalidate session if IP changes.
-  - _Relaxed Mode:_ Ignore (better for mobile users moving between Wi-Fi and 5G).
-- **CSRF Token:** A unique token linked to this specific Session ID to prevent Cross-Site Request Forgery.
-
----
-
-## 3. Session State Lifecycle
-
-1. **Generation:** Create ID → Set Cookie → Initialize Storage.
-2. **Validation:** Check Cookie ID → Match with Driver → Verify IP/UA.
-3. **Update:** Refresh `Last Activity` → Write new Payload/Flash data.
-4. **Destruction:** Clear Storage → Expire Cookie.
-
----
-
-## 4. Setup
-
-### 1. Installation
-
-Install the package via Composer:
+## Installation
 
 ```bash
 composer require monkeyscloud/monkeyslegion-session
 ```
 
-### 2. Publish Configuration
+## Architecture
 
-Run the following command to publish the configuration file. You can choose between **MLC** and **PHP** formats:
+```text
+monkeyslegion-session/
+├── config/
+│   ├── session.mlc                    # MLC configuration format
+│   └── session.php                    # PHP configuration format
+├── src/
+│   ├── Bags/
+│   │   ├── AttributeBag.php           # Session attribute storage with dot notation
+│   │   ├── FlashBag.php               # One-hop flash message container
+│   │   └── MetadataBag.php            # Timestamps and usage tracking
+│   ├── Cli/
+│   │   └── Command/
+│   │       └── ConfigPublisher.php    # CLI command to publish config files
+│   ├── Contracts/
+│   │   ├── DataHandlerInterface.php   # Serialization / encryption contract
+│   │   ├── SessionBagInterface.php    # Bag contract (initialize, clear, getStorageKey)
+│   │   ├── SessionDriverInterface.php # Storage driver contract (with lock/unlock)
+│   │   └── SessionInterface.php       # Session manager API contract
+│   ├── Drivers/
+│   │   ├── DatabaseDriver.php         # Database storage via ConnectionManagerInterface
+│   │   ├── FileDriver.php             # Filesystem storage with flock() locking
+│   │   └── RedisDriver.php            # Redis storage with EXPIRE-based GC
+│   ├── Exceptions/
+│   │   ├── SessionException.php       # Named constructors for all error cases
+│   │   └── SessionLockException.php   # Lock acquisition failure
+│   ├── Factory/
+│   │   └── DriverFactory.php          # Creates drivers from config arrays
+│   ├── Middleware/
+│   │   ├── SessionMiddleware.php      # PSR-15 session lifecycle middleware
+│   │   └── VerifyCsrfToken.php        # CSRF token validation middleware
+│   ├── EncryptedSerializer.php        # AES-256-GCM with key-ring rotation
+│   ├── NativeSerializer.php           # Standard PHP serialize/unserialize
+│   ├── SessionBag.php                 # Legacy data container (attributes + flash)
+│   ├── SessionManager.php             # Session orchestrator (implements SessionInterface)
+│   └── SessionServiceProvider.php     # PSR-11 DI registration
+└── tests/
+```
+
+---
+
+## Quick Start
+
+### 1. Register the Service Provider
+
+The `SessionServiceProvider` binds `SessionDriverInterface` → `FileDriver` by default. Register it with the DI container:
+
+```php
+use MonkeysLegion\Session\SessionServiceProvider;
+
+// In your application bootstrap
+$provider = new SessionServiceProvider();
+$provider->register($containerBuilder);
+```
+
+To swap drivers, override the binding in your container definitions:
+
+```php
+use MonkeysLegion\Session\Contracts\SessionDriverInterface;
+use MonkeysLegion\Session\Drivers\RedisDriver;
+
+$builder->bind(SessionDriverInterface::class, RedisDriver::class);
+```
+
+### 2. Add Middleware
+
+Register `SessionMiddleware` in your PSR-15 pipeline to enable automatic session lifecycle management:
+
+```php
+use MonkeysLegion\Session\Middleware\SessionMiddleware;
+
+$pipeline->add(SessionMiddleware::class);
+```
+
+For CSRF protection on state-changing requests, add the `VerifyCsrfToken` middleware **after** the session middleware:
+
+```php
+use MonkeysLegion\Session\Middleware\VerifyCsrfToken;
+
+$pipeline->add(VerifyCsrfToken::class);
+```
+
+### 3. Use in Controllers
+
+The session is injected as a request attribute by the middleware:
+
+```php
+class ProfileController
+{
+    public function show(ServerRequestInterface $request): ResponseInterface
+    {
+        /** @var \MonkeysLegion\Session\SessionManager $session */
+        $session = $request->getAttribute('session');
+
+        // Read data (dot notation supported)
+        $name = $session->get('user.profile.name', 'Guest');
+
+        // Write data
+        $session->set('last_visited', time());
+
+        // Flash a one-time message
+        $session->flash('status', 'Welcome back!');
+
+        // ...
+    }
+}
+```
+
+---
+
+## Session Manager API
+
+The `SessionManager` implements `SessionInterface` and is the primary class your application interacts with.
+
+### Property Hooks (PHP 8.4)
+
+```php
+// Read-only session ID (throws SessionException if set while started)
+$manager->id;               // string
+
+// Check if session is active
+$manager->isStarted;        // bool
+```
+
+### Lifecycle Methods
+
+| Method                      | Returns  | Description                                                                                                                                                     |
+| --------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start(?string $id)`        | `bool`   | Resume an existing session or start a new one. Acquires a driver lock, reads storage, initializes the `SessionBag`, and auto-generates a CSRF token if missing. |
+| `save()`                    | `bool`   | Serialize attributes, write to the driver, and release the lock.                                                                                                |
+| `regenerate(bool $destroy)` | `bool`   | Change the session ID (prevents fixation). Optionally destroy old data.                                                                                         |
+| `invalidate()`              | `bool`   | Flush all data and regenerate the ID (full session reset).                                                                                                      |
+| `getName()`                 | `string` | Get the session cookie name (default: `ml_session`).                                                                                                            |
+| `getId()`                   | `string` | Alias for the `$id` property hook.                                                                                                                              |
+| `isStarted()`               | `bool`   | Alias for the `$isStarted` property hook.                                                                                                                       |
+
+### Data Access
+
+| Method                                     | Description                             |
+| ------------------------------------------ | --------------------------------------- |
+| `get(string $key, mixed $default = null)`  | Retrieve data (dot notation supported). |
+| `set(string $key, mixed $value)`           | Store data in the session.              |
+| `has(string $key)`                         | Check if a key exists.                  |
+| `forget(string $key)`                      | Remove a key.                           |
+| `pull(string $key, mixed $default = null)` | Get a value and immediately delete it.  |
+| `all()`                                    | Return all session attributes.          |
+
+### Flash Data
+
+| Method                                  | Description                                                          |
+| --------------------------------------- | -------------------------------------------------------------------- |
+| `flash(string $key, mixed $value)`      | Store data for the **next request** only.                            |
+| `getFlash(string $key, mixed $default)` | Retrieve flash data from the previous request.                       |
+| `reflash()`                             | Keep **all** flash data for one more request.                        |
+| `keep(string ...$keys)`                 | Keep **specific** flash keys for one more request.                   |
+| `now(string $key, mixed $value)`        | Flash data available immediately, expires at end of current request. |
+
+### Security
+
+| Method                                     | Description                                                  |
+| ------------------------------------------ | ------------------------------------------------------------ |
+| `token()`                                  | Get the current CSRF token.                                  |
+| `regenerateToken()`                        | Regenerate the CSRF token (80 hex chars via `random_bytes`). |
+| `setIpAddress(?string $ip)`                | Set the user's IP for fingerprinting.                        |
+| `setUserAgent(?string $ua)`                | Set the user's browser string for fingerprinting.            |
+| `setUserId(string\|int\|null $id)`         | Associate a user ID with the session.                        |
+| `setRequestInfo(?string $ip, ?string $ua)` | Convenience: set IP and User-Agent at once.                  |
+
+---
+
+## Bag Architecture
+
+Version 2 introduces a segmented Bag system that implements `SessionBagInterface`. Each bag manages a distinct concern:
+
+### SessionBagInterface
+
+```php
+interface SessionBagInterface
+{
+    public string $name { get; }                     // Bag identifier (property hook)
+    public function initialize(array &$array): void; // Initialize with reference to storage
+    public function getStorageKey(): string;          // Storage key prefix (e.g. _attributes)
+    public function clear(): array;                   // Clear and return previous contents
+}
+```
+
+### AttributeBag
+
+Persistent key/value storage with dot notation:
+
+```php
+$bag = new AttributeBag();
+$bag->set('user.preferences.theme', 'dark');
+$bag->get('user.preferences.theme');  // 'dark'
+$bag->has('user.preferences');        // true
+$bag->pull('temp_key');               // get + forget
+$bag->forget('user.preferences.theme');
+```
+
+### FlashBag
+
+One-hop data with fine-grained retention:
+
+```php
+$flash = new FlashBag();
+
+// Set flash for next request
+$flash->set('success', 'Profile updated!');
+
+// Set flash available now, gone after this request
+$flash->now('error', 'Something failed.');
+
+// Keep specific keys alive for one more hop
+$flash->keep('success', 'warning');
+
+// Keep everything alive
+$flash->reflash();
+
+// Auto-cleanup: call before save
+$flash->clearOldData();
+```
+
+### MetadataBag
+
+Session timestamps and usage tracking:
+
+```php
+$meta = new MetadataBag();
+
+$meta->getCreatedAt();     // Unix timestamp of session creation
+$meta->getLastUsedAt();    // Last activity timestamp
+
+// Throttle DB writes: only update last_used_at every N seconds
+$meta->setUpdateThreshold(300);
+$meta->stampNew();         // Conditionally updates based on threshold
+```
+
+---
+
+## Storage Drivers
+
+All drivers implement `SessionDriverInterface` with atomic locking:
+
+### SessionDriverInterface
+
+| Method    | Arguments                      | Returns      | Description                                       |
+| --------- | ------------------------------ | ------------ | ------------------------------------------------- |
+| `open`    | `$path`, `$name`               | `bool`       | Initialize the storage resource.                  |
+| `close`   | —                              | `bool`       | Close the storage resource.                       |
+| `read`    | `$id`                          | `?array`     | Retrieve session data (payload + metadata) by ID. |
+| `write`   | `$id`, `$payload`, `$metadata` | `bool`       | Save serialized data and metadata.                |
+| `destroy` | `$id`                          | `bool`       | Delete the session from storage.                  |
+| `gc`      | `$maxLifetime`                 | `int\|false` | Garbage collect sessions older than N seconds.    |
+| `lock`    | `$id`, `$timeout = 30`         | `bool`       | Acquire exclusive lock on the session.            |
+| `unlock`  | `$id`                          | `bool`       | Release the session lock.                         |
+
+### File Driver
+
+Uses `flock()` for atomic locking. Sessions stored as individual files:
+
+```php
+use MonkeysLegion\Session\Drivers\FileDriver;
+
+$driver = new FileDriver(
+    path: '/var/sessions',
+    ttl: 7200
+);
+```
+
+### Database Driver
+
+Stores sessions in a SQL table via `ConnectionManagerInterface`:
+
+```php
+use MonkeysLegion\Session\Drivers\DatabaseDriver;
+
+$driver = new DatabaseDriver($connectionManager, [
+    'table'    => 'sessions',
+    'lifetime' => 7200,
+]);
+```
+
+#### Migration
+
+```sql
+CREATE TABLE sessions (
+    session_id    VARCHAR(255) PRIMARY KEY NOT NULL,
+    payload       TEXT,
+    flash_data    TEXT,
+    created_at    INTEGER NOT NULL,
+    last_activity INTEGER NOT NULL,
+    expiration    INTEGER NOT NULL,
+    user_id       INTEGER NULL,
+    ip_address    VARCHAR(45) NULL,
+    user_agent    TEXT NULL
+);
+```
+
+### Redis Driver
+
+Uses `EXPIRE` for automatic garbage collection:
+
+```php
+use MonkeysLegion\Session\Drivers\RedisDriver;
+
+$driver = new RedisDriver(
+    redis: $redisInstance,
+    prefix: 'session:',
+    ttl: 7200
+);
+```
+
+### Driver Factory
+
+Create drivers from configuration arrays dynamically:
+
+```php
+use MonkeysLegion\Session\Factory\DriverFactory;
+
+$factory = new DriverFactory();
+$driver  = $factory->make('file', ['path' => '/var/sessions', 'lifetime' => 7200]);
+$driver  = $factory->make('redis', ['redis' => $redis, 'prefix' => 'sess:', 'lifetime' => 3600]);
+```
+
+---
+
+## Payload Encryption
+
+Session data can optionally be encrypted at rest using AES-256-GCM with key-ring rotation support.
+
+### NativeSerializer (Default)
+
+Standard PHP `serialize()` / `unserialize()`:
+
+```php
+use MonkeysLegion\Session\NativeSerializer;
+
+$handler = new NativeSerializer();
+```
+
+### EncryptedSerializer
+
+Wraps any `DataHandlerInterface` with AES-256-GCM encryption. Supports multiple keys for zero-downtime key rotation:
+
+```php
+use MonkeysLegion\Session\EncryptedSerializer;
+use MonkeysLegion\Session\NativeSerializer;
+
+$handler = new EncryptedSerializer(
+    serializer: new NativeSerializer(),
+    keys: [
+        'v2' => 'new-256-bit-key-here',   // Current key (used for encryption)
+        'v1' => 'old-256-bit-key-here',    // Legacy key (used for decryption fallback)
+    ]
+);
+
+// Inject into the SessionManager
+$manager = new SessionManager($driver, $handler);
+```
+
+**Key rotation** works transparently: new writes always use the first key in the ring. Reads attempt the tagged key first, then fall back through all keys. Remove old keys once all sessions have been re-encrypted.
+
+---
+
+## CSRF Protection
+
+The session middleware auto-generates a CSRF token (`_token`) when a session starts.
+
+### Rendering in Templates
+
+```html
+<form method="POST" action="/profile">
+  <input type="hidden" name="_csrf" value="{{ session.token() }}" />
+  <!-- ... -->
+</form>
+```
+
+### VerifyCsrfToken Middleware
+
+The middleware checks tokens on all non-read methods (`POST`, `PUT`, `PATCH`, `DELETE`):
+
+- `_csrf` field in the parsed body
+- `X-CSRF-TOKEN` header
+- `X-XSRF-TOKEN` header (fallback)
+
+Read methods (`GET`, `HEAD`, `OPTIONS`) pass through automatically.
+
+```php
+use MonkeysLegion\Session\Middleware\VerifyCsrfToken;
+
+// Register after SessionMiddleware
+$pipeline->add(VerifyCsrfToken::class);
+```
+
+---
+
+## Configuration
+
+Publish the config file using the CLI command:
 
 ```bash
 php mlc session:publish
 ```
 
-#### MLC Format (`config/session.mlc`)
+### MLC Format (`config/session.mlc`)
+
 ```text
 session {
-    # The default session driver to use.
     default env(SESSION_DRIVER, 'file')
 
     drivers {
@@ -91,225 +472,92 @@ session {
 }
 ```
 
-#### PHP Format (`config/session.php`)
+### PHP Format (`config/session.php`)
+
 ```php
 return [
     'session' => [
         'default' => $_ENV['SESSION_DRIVER'] ?? 'file',
         'drivers' => [
             'file' => [
-                'path' => $_ENV['SESSION_FILE_PATH'] ?? base_path('var/sessions'),
+                'path'     => $_ENV['SESSION_FILE_PATH'] ?? base_path('var/sessions'),
                 'lifetime' => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
             ],
-            // ... other drivers
+            'database' => [
+                'table'    => $_ENV['SESSION_TABLE'] ?? 'sessions',
+                'lifetime' => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
+            ],
+            'redis' => [
+                'connection' => $_ENV['REDIS_SESSION_CONNECTION'] ?? 'default',
+                'lifetime'   => (int) ($_ENV['SESSION_LIFETIME'] ?? 7200),
+            ],
         ],
-        // ... cookie and encryption settings
-    ]
+        'cookie_name'     => $_ENV['SESSION_COOKIE_NAME'] ?? 'ml_session',
+        'cookie_lifetime' => (int) ($_ENV['SESSION_COOKIE_LIFETIME'] ?? 7200),
+        'cookie_path'     => $_ENV['SESSION_COOKIE_PATH'] ?? '/',
+        'cookie_domain'   => $_ENV['SESSION_COOKIE_DOMAIN'] ?? '',
+        'cookie_secure'   => (bool) ($_ENV['SESSION_COOKIE_SECURE'] ?? true),
+        'cookie_httponly'  => (bool) ($_ENV['SESSION_COOKIE_HTTPONLY'] ?? true),
+        'cookie_samesite'  => $_ENV['SESSION_COOKIE_SAMESITE'] ?? 'Lax',
+        'encrypt'          => (bool) ($_ENV['SESSION_ENCRYPT'] ?? false),
+        'keys' => [
+            'main_key' => $_ENV['APP_KEY'] ?? null,
+        ],
+    ],
 ];
 ```
 
-### 3. Database Driver Setup
+---
 
-If you plan to use the `database` driver, you need to create the sessions table. You can use the provided migration file or create it manually:
+## Middleware Lifecycle
 
-```sql
-CREATE TABLE sessions (
-    session_id VARCHAR(255) PRIMARY KEY NOT NULL,
-    payload TEXT,
-    flash_data TEXT,
-    created_at INTEGER NOT NULL,
-    last_activity INTEGER NOT NULL,
-    expiration INTEGER NOT NULL,
-    user_id INTEGER NULL,
-    ip_address VARCHAR(45) NULL,
-    user_agent TEXT NULL
-);
-```
+The `SessionMiddleware` manages the full request/response lifecycle:
 
-### 4. Middleware Registration
+| Phase           | Action                     | Detail                                                           |
+| --------------- | -------------------------- | ---------------------------------------------------------------- |
+| **1. Extract**  | `getCookieParams()`        | Read the session ID from the configured cookie name.             |
+| **2. Start**    | `manager->start()`         | Lock → Read → Initialize Bag → Generate CSRF token if missing.   |
+| **3. Metadata** | `populateMetadata()`       | Extract IP (`REMOTE_ADDR` / `X-Forwarded-For`) and `User-Agent`. |
+| **4. Inject**   | `withAttribute('session')` | Attach the `SessionManager` to the PSR-7 request.                |
+| **5. Process**  | `handler->handle()`        | Application logic runs (routes, controllers).                    |
+| **6. Commit**   | `manager->save()`          | Serialize → Write → Unlock (in a `finally` block for safety).    |
+| **7. Cookie**   | `withAddedHeader()`        | Set the `Set-Cookie` header with secure defaults.                |
 
-Add the `SessionMiddleware` to your application's middleware stack to enable session support:
+---
+
+## Security Posture
+
+- **Atomic locking** — prevents concurrent request race conditions via `flock()` / Redis `SETNX` / row-level locks
+- **CSPRNG session IDs** — `random_bytes(20)` (40 hex chars) for all session identifiers
+- **CSRF token generation** — `random_bytes(40)` (80 hex chars) for CSRF tokens
+- **Session fixation prevention** — `regenerate(destroy: true)` on login
+- **AES-256-GCM encryption** — authenticated encryption with key-ring rotation
+- **IP & User-Agent fingerprinting** — stored per-session for anomaly detection
+- **Timing-safe comparisons** — `hash_equals` for all CSRF token checks
+- **Graceful lock release** — `finally` block ensures unlock even on exceptions
+
+## Error Handling
+
+The `SessionException` class provides named constructors for clear, debuggable error messages:
 
 ```php
-use MonkeysLegion\Session\Middleware\SessionMiddleware;
-
-// Register in your global or route-specific middleware pipeline
-$pipeline->add(SessionMiddleware::class);
+SessionException::alreadyStarted();            // "Session has already been started."
+SessionException::notStarted();                // "Session has not been started yet."
+SessionException::invalidId($id);              // "Invalid session ID: ..."
+SessionException::serializationFailed($msg);   // "Failed to serialize session data."
+SessionException::deserializationFailed($msg); // "Failed to deserialize session data."
+SessionException::driverFailed($op, $msg);     // "Session driver operation '...' failed."
+SessionException::securityValidationFailed($r);// "Session security validation failed: ..."
+SessionException::expired();                   // "Session has expired."
 ```
 
-To enable CSRF protection, also add the `VerifyCsrfToken` middleware:
+## Testing
 
-```php
-use MonkeysLegion\Session\Middleware\VerifyCsrfToken;
-
-$pipeline->add(VerifyCsrfToken::class);
+```bash
+composer test
+composer phpstan
 ```
 
----
+## License
 
-## 5. Architecture Overview
-
-### SessionDriverInterface
-
-| Method      | Arguments                 | Returns      | Description                                       |
-| :---------- | :------------------------ | :----------- | :------------------------------------------------ |
-| **open**    | `path`, `name`            | `bool`       | Initialize the storage resource.                  |
-| **close**   | -                         | `bool`       | Close the storage resource.                       |
-| **read**    | `id`                      | `?array`     | Retrieve session data (payload + metadata) by ID. |
-| **write**   | `id`, `payload`, `metadata` | `bool`       | Save serialized session data and metadata.        |
-| **destroy** | `id`                      | `bool`       | Delete the session data from storage.             |
-| **gc**      | `maxLifetime`             | `int/false`  | Garbage Collection: Delete sessions older than X. |
-| **lock**    | `id`, `timeout`           | `bool`       | Acquire an exclusive lock on the session ID.      |
-| **unlock**  | `id`                      | `bool`       | Release the lock so other requests can proceed.   |
-
-### SessionManager Details
-
-The `SessionManager` is the high-level class your application code will actually interact with. It manages the **Session Object** (the data) and coordinates with the **Driver** (the storage).
-
-#### Responsibilities of the Manager
-
-1. **Bootstrapping:** Reading the Session ID from the request cookies and asking the Driver for the data.
-2. **Serialization:** Turning the PHP array into a string (and back) so the Driver can save it.
-3. **Flash Management:** Handling data that only lasts for one "hop" (request).
-4. **Security Checks:** Comparing the User-Agent or IP before allowing access.
-
-#### SessionManager Methods
-
-| Method                               | Description                                                    |
-| :----------------------------------- | :------------------------------------------------------------- |
-| **start($id)**                       | Resumes or starts a new session with given ID.                 |
-| **save()**                           | Saves the current session data to the driver.                  |
-| **getId()**                          | Get the current Session ID.                                    |
-| **get($key, $default)**              | Retrieve data (supports dot notation).                         |
-| **set($key, $value)**                | Store data in the session.                                     |
-| **has($key)**                        | Returns `true` if the key is present.                          |
-| **forget($key)**                     | Remove a key from the session.                                 |
-| **flash($key, $value)**              | Store data for the next request only.                          |
-| **getFlash($key, $default)**         | Retrieve flash data.                                           |
-| **reflash()**                        | Keep all flash data for the next request.                      |
-| **regenerate($destroy)**             | Change the Session ID (Crucial for login to prevent fixation). |
-| **setIpAddress($ip)**                | Set the user's IP address for validation.                      |
-| **setUserAgent($ua)**                | Set the user's browser string for validation.                  |
-| **setUserId($id)**                   | Associate a User ID with the session.                          |
-
----
-
-## 6. Session Middleware: The Request Lifecycle
-
-The Middleware bridges the HTTP Request/Response with the Session Manager. It ensures data is consistent and atomic.
-
-| Phase           | Action              | Detail                                                                             |
-| :-------------- | :------------------ | :--------------------------------------------------------------------------------- |
-| **1. Extract**  | `getCookieParams()` | Checks the HTTP cookies for the configured session name (e.g., `ml_session`). It also captures the IP (`REMOTE_ADDR` or `X-Forwarded-For`) and the `User-Agent`. |
-| **2. Start**    | `manager->start()`  | The Manager triggers `driver->lock()` and `driver->read()`. It associates the extracted IP and User-Agent with the Session payload for security tracking. |
-| **3. Inject**   | `withAttribute()`   | The Session object is attached to the Request for use in Controllers.              |
-| **4. Process**  | `handler->handle()` | The actual application logic runs (Routes, Controllers, Actions).                  |
-| **5. Capture**  | `getResponse()`     | The Middleware catches the resulting Response object.                              |
-| **6. Commit**   | `manager->save()`   | The Manager triggers `driver->write()` and `driver->unlock()`.                     |
-| **7. Finalize** | `withAddedHeader()` | If the session is new or regenerated, add the `Set-Cookie` header to the Response. |
-
-### Logic Flow Diagram (Conceptual)
-
-1. **Request In** ↓
-2. **SessionMiddleware::process()**
-   → [Manager] → [Driver] → (LOCK & READ)
-   ↓
-3. **Controller / Logic** → `$request->getAttribute('session')->set('key', 'value')`
-   ↓
-4. **SessionMiddleware (Post-Process)**
-   → [Manager] → [Driver] → (WRITE & UNLOCK)
-   ↓
-5. **Response Out** (with Set-Cookie header)
-
-Since we are using **Atomic Locking**, the Middleware must be careful. If an exception occurs during the "App Phase" (Step 4), the Middleware should still trigger the **Unlock** mechanism in a `finally` block to ensure the session isn't stuck in a locked state for other requests. (probably re throw in catch if user didn't already catch that occurred exception)
-
----
-
-## 7. Project Structure
-
-Since we are aligning with the **monkeyslegion-** ecosystem, the architecture needs to be modular, interface-driven, and ready for PSR-11 (Dependency Injection).
-
-```text
-monkeyslegion-session/
-├── config/
-│   ├── session.mlc                # Recommended MLC configuration
-│   └── session.php                # Optional PHP configuration
-├── docs/
-│   └── usage.md                   # Usage documentation and examples
-├── migrations/
-│   └── sessions.sql               # Database migration for sessions table
-├── src/
-│   ├── Cli/
-│   │   └── Command/
-│   │       └── ConfigPublisher.php    # CLI command to publish config files
-│   ├── Contracts/
-│   │   ├── DataHandlerInterface.php   # Serialization contract (e.g., JSON, encryption)
-│   │   ├── SessionDriverInterface.php # Storage driver contract (with lock/unlock)
-│   │   └── SessionInterface.php       # Session manager API contract
-│   ├── Drivers/
-│   │   ├── DatabaseDriver.php         # Database session storage using ConnectionManager
-│   │   ├── FileDriver.php             # Filesystem session storage implementation
-│   │   └── RedisDriver.php            # Redis session storage implementation
-│   ├── EncryptedSerializer.php        # AES-256-GCM encryption layer (implements DataHandlerInterface)
-│   ├── Exceptions/
-│   │   ├── SessionException.php       # Generic session exception
-│   │   └── SessionLockException.php   # Lock acquisition failure exception
-│   ├── Factory/
-│   │   └── DriverFactory.php          # Factory for creating driver instances
-│   ├── Middleware/
-│   │   ├── SessionMiddleware.php      # PSR-15 session middleware logic
-│   │   └── VerifyCsrfToken.php        # CSRF token validation middleware
-│   ├── NativeSerializer.php           # Default JSON serializer (implements DataHandlerInterface)
-│   ├── SessionBag.php                 # Data container (handles flash/payload)
-│   └── SessionManager.php             # Session orchestrator (coordinates Bag + Drivers)
-├── tests/
-```
-
-### Component Breakdown
-
-#### 1. The `SessionBag`
-
-Instead of putting all logic in the Manager, a `SessionBag` holds the actual data array. It handles the "Dot Notation" (e.g., `$session->get('user.profile.name')`) and manages which keys are **Flash** (one-time use) vs. **Persistent**. It uses `put()` for storing attributes and `flash()` for temporary data.
-
-#### 2. The `SessionManager` (The Orchestrator)
-
-This class should be injected into your Middleware or Controllers.
-
-- It uses the `DriverInterface` to fetch data.
-- It uses a `Serializer` to decode that data into the `SessionBag`.
-- **Important:** It must handle the `regenerate()` method, which creates a new ID but keeps the data (crucial to prevent Session Fixation attacks during login).
-
-#### 3. The `Driver` Implementations
-
-- **Database:** Uses `monkeyslegion-database` to store sessions in a table with appropriate schema (id, payload, etc.).
-- **Redis:** Should use `EXPIRE` to let Redis handle the "Garbage Collection" automatically.
-- **File:** Needs `flock()` to handle the **Atomic Locking**.
-
----
-
-## Contributing
-
-**Welcome to contribute!**
-
-This is an open-source project and we appreciate any help from the community. Whether it's a bug fix, new feature, or documentation improvement, all contributions are valued.
-
-### How to Contribute
-
-1. **Fork** the repository
-2. **Clone** your fork locally
-3. **Create** a new branch for your feature/fix (`git checkout -b feature/amazing-feature`)
-4. **Make** your changes
-5. **Test** your changes thoroughly
-6. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-7. **Push** the branch to your fork
-8. **Submit** a Pull Request
-
-### Guidelines
-
-- Follow PSR-12 coding standards
-- Write unit tests for new features (Or it gonna need to be tested by us before merge)
-- Update documentation as needed
-- Keep commits atomic and well-described
-- Be respectful and constructive in discussions
-
-We look forward to your contributions!
+MIT © [MonkeysCloud](https://monkeys.cloud)
