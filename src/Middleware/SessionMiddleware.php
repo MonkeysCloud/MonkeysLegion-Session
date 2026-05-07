@@ -14,10 +14,22 @@ class SessionMiddleware implements MiddlewareInterface
 {
     private array $config;
 
+    /**
+     * @var list<string> Path prefixes or regex patterns to skip session start
+     */
+    private array $except;
+
+    /** Whether sessions are enabled globally */
+    private bool $enabled;
+
     public function __construct(
         private readonly SessionManager $manager,
         array $config = []
     ) {
+        $this->enabled = (bool) ($config['enabled'] ?? true);
+        $this->except = $config['except'] ?? [];
+        unset($config['enabled'], $config['except']);
+
         $this->config = array_merge([
             'cookie_lifetime' => 7200, // 2 hours
             'cookie_path' => '/',
@@ -30,6 +42,16 @@ class SessionMiddleware implements MiddlewareInterface
 
     public function process(ServerRequestInterface $request, RequestHandlerInterface $handler): ResponseInterface
     {
+        // Sessions globally disabled — pass through
+        if (!$this->enabled) {
+            return $handler->handle($request);
+        }
+
+        // Skip session entirely for exempt paths (e.g. sendBeacon endpoints)
+        if ($this->isExempt($request)) {
+            return $handler->handle($request);
+        }
+
         // 1. Get Session ID from Cookie
         $cookies = $request->getCookieParams();
         $id = $cookies[$this->manager->getName()] ?? null;
@@ -56,6 +78,32 @@ class SessionMiddleware implements MiddlewareInterface
         }
 
         return $response;
+    }
+
+    /**
+     * Check if the current request path matches any exempt pattern.
+     *
+     * Supports:
+     *  - Plain prefix strings: "/api/" matches any path starting with /api/
+     *  - Regex patterns (surrounded by #...#): "#^/admin/content/\d+/lock/release$#"
+     */
+    private function isExempt(ServerRequestInterface $request): bool
+    {
+        $path = $request->getUri()->getPath();
+
+        foreach ($this->except as $pattern) {
+            // Regex pattern (delimited with #)
+            if (str_starts_with($pattern, '#') && preg_match($pattern, $path)) {
+                return true;
+            }
+
+            // Plain prefix match
+            if (str_starts_with($path, $pattern) || $path === $pattern) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function populateMetadata(ServerRequestInterface $request): void
